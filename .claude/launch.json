@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "ibx-kentik-prepop-web",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["/Users/marrison/Projects/kentik/ibx_kentik_prepop/web_server.py", "--port", "5055", "-d"],
+      "port": 5055
+    }
+  ]
+}

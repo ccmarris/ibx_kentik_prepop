@@ -7,7 +7,6 @@ ibx_kentik.ini
 *.ini
 !*.ini.example
 ibx_kentik_prepop_state.json
-*.csv
-*.json
-!package.json
+plan*.csv
+plan*.json
 .DS_Store
