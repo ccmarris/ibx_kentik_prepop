@@ -174,15 +174,31 @@ Review the payloads, then create the devices in Kentik.
 ./web_server.py -c ibx_kentik.ini -v
 ```
 
-Then open <http://127.0.0.1:5000>. The UI drives the same code: pick the source
-and site key (with a key picker that shows what is populated), run a dry run,
-read the warnings, and apply — the apply run is streamed live as
-Server-Sent Events.
+Then open <http://127.0.0.1:5000>. The UI drives the same code: pick the
+credentials file, source and site key (both have pickers showing what is
+available), run a dry run, read the warnings, and apply — the apply run is
+streamed live as Server-Sent Events.
+
+### Switching credentials from the UI
+
+The **Credentials ini file** field overrides the file the server was started
+with, per request — useful when you look after several tenants and don't want a
+restart between them. The picker lists the `*.ini` files in the startup file's
+directory, the project directory and `~/configs`, labelled with the sections
+each one actually contains (`[NIOS]`, `[UDDI]`, `[KENTIK]`). Relative paths
+resolve against the project directory and `~` is expanded. A file is only
+accepted if it exists and contains at least one of those three sections; values
+are never sent to the browser, only the file path and the section names.
+
+Start the server with `--lock-config` to pin it to the startup ini and refuse
+overrides — the field is disabled in the UI and the API rejects the request.
 
 Single-operator model: credentials come from the server-side ini, so anyone who
-can reach the UI acts as that identity. It binds to `127.0.0.1` by default;
-keep it that way unless you put authentication in front of it. The apply
-endpoint requires an explicit confirmation in the request body.
+can reach the UI acts as that identity — and, unless you use `--lock-config`,
+can point it at any ini file that the server's user can read. It binds to
+`127.0.0.1` by default; keep it that way unless you put authentication in front
+of it. The apply endpoint requires an explicit confirmation in the request
+body.
 
 ## Verify before running against a customer tenant
 

@@ -1,7 +1,8 @@
 'use strict';
 
-const VALUE_FIELDS = ['source', 'site_key', 'class_key', 'site_type_key',
-                      'network_view', 'ip_space', 'site_filter', 'max_prefix_len'];
+const VALUE_FIELDS = ['config_file', 'source', 'site_key', 'class_key',
+                      'site_type_key', 'network_view', 'ip_space', 'site_filter',
+                      'max_prefix_len'];
 const FLAG_FIELDS = ['include_address_blocks', 'replace_networks', 'devices',
                      'use_insight', 'use_uai', 'use_gateways'];
 
@@ -139,10 +140,22 @@ function renderPlan(plan) {
   setStatus(message, false);
 }
 
-async function loadConfig() {
+async function loadConfig(path) {
+  const params = path ? '?config_file=' + encodeURIComponent(path) : '';
   try {
-    const response = await fetch('/api/config');
+    const response = await fetch('/api/config' + params);
     const data = await response.json();
+    if (data.error) {
+      el('env').textContent = data.error;
+      setStatus(data.error, true);
+      return;
+    }
+    if (!path) { el('config_file').value = data.ini_file; }
+    if (data.lock_config) {
+      el('config_file').disabled = true;
+      el('config_hint').textContent =
+        'The server was started with --lock-config, so the credentials file is fixed.';
+    }
     const lines = [
       'Credentials file: ' + escapeHtml(data.ini_file),
       'NIOS: ' + (data.nios.credentials ? escapeHtml(data.nios.gm) : 'not configured'),
@@ -151,6 +164,7 @@ async function loadConfig() {
       'Device writes: disabled in this version'
     ];
     el('env').innerHTML = lines.join('<br>');
+    setStatus('Reading ' + data.ini_file + '.', false);
     if (data.defaults.source) { el('source').value = data.defaults.source; }
     if (data.defaults.site_key) { el('site_key').value = data.defaults.site_key; }
     if (data.defaults.class_key) { el('class_key').value = data.defaults.class_key; }
@@ -159,9 +173,23 @@ async function loadConfig() {
   }
 }
 
+async function loadInis() {
+  try {
+    const response = await fetch('/api/inis');
+    const data = await response.json();
+    el('ini_list').innerHTML = (data.candidates || []).map(function (item) {
+      return '<option value="' + escapeHtml(item.path) + '">' +
+             escapeHtml(item.name) + ' [' + item.sections.join(', ') + ']</option>';
+    }).join('');
+  } catch (error) {
+    el('config_hint').textContent = 'Could not list candidate ini files: ' + error;
+  }
+}
+
 async function loadKeys(event) {
   event.preventDefault();
   const params = new URLSearchParams({
+    config_file: el('config_file').value.trim(),
     source: el('source').value,
     network_view: el('network_view').value.trim(),
     ip_space: el('ip_space').value.trim()
@@ -270,7 +298,15 @@ async function runApply() {
   }
 }
 
+el('config_file').addEventListener('change', function () {
+  const path = el('config_file').value.trim();
+  el('key_list').innerHTML = '';
+  el('run_apply').disabled = true;
+  currentPlan = null;
+  loadConfig(path);
+});
 el('load_keys').addEventListener('click', loadKeys);
 el('run_plan').addEventListener('click', runPlan);
 el('run_apply').addEventListener('click', runApply);
 loadConfig();
+loadInis();

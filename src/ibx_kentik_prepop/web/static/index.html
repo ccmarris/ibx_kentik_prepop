@@ -108,6 +108,14 @@ a { color: var(--ibx-green); text-decoration: underline; }
 <main>
   <section>
     <div class="card rail">
+      <h2>Credentials</h2>
+      <label for="config_file">Credentials ini file</label>
+      <input type="text" id="config_file" list="ini_list" placeholder="ibx_kentik.ini">
+      <datalist id="ini_list"></datalist>
+      <p class="hint" id="config_hint">Overrides the file the server was started with, for this request only.</p>
+    </div>
+
+    <div class="card rail">
       <h2>Source</h2>
       <label for="source">Platform</label>
       <select id="source">

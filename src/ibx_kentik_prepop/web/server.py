@@ -57,7 +57,8 @@ from argparse import Namespace
 from pathlib import Path
 from flask import Flask, Response, jsonify, request, send_from_directory, stream_with_context
 from ibx_kentik_prepop import report
-from ibx_kentik_prepop.config import (DEFAULT_INI_FILE, build_config,
+from ibx_kentik_prepop.config import (DEFAULT_INI_FILE, INI_SECTIONS,
+                                      build_config, read_ini,
                                       validate_kentik_credentials,
                                       validate_source_credentials)
 from ibx_kentik_prepop.plan import build_plan, get_source
@@ -73,6 +74,12 @@ CLI_SCRIPT = PROJECT_ROOT / 'ibx_kentik_prepop.py'
 # Resolved at startup from the command line
 CONFIG_FILE = DEFAULT_INI_FILE
 YAML_FILE = ''
+# When locked, the ini chosen at startup cannot be overridden per request
+LOCK_CONFIG = False
+
+# Directories scanned for candidate ini files offered in the UI picker
+EXTRA_INI_DIRS = (Path.home() / 'configs',)
+MAX_INI_CANDIDATES = 200
 
 app = Flask(__name__,
             static_folder=str(SCRIPT_DIR / 'static'),
@@ -101,6 +108,86 @@ VALUE_FIELDS = {
 }
 
 
+def resolve_config_file(requested: str) -> tuple:
+    '''
+    Resolve the credentials ini file for one request
+
+    An override is only accepted when the server was not started with
+    --lock-config, and only when the file exists and actually looks like a
+    credentials ini for this tool. Values are never returned to the client.
+
+    Parameters:
+        requested (str): path supplied by the client, empty for the default
+
+    Returns:
+        tuple: (resolved path str, error message str) - one of the two is empty
+    '''
+    path = CONFIG_FILE
+    error = ''
+    wanted = str(requested or '').strip()
+
+    if wanted and wanted != CONFIG_FILE:
+        if LOCK_CONFIG:
+            error = ('This server was started with --lock-config, so the '
+                     'credentials file cannot be changed from the UI')
+        else:
+            candidate = Path(wanted).expanduser()
+            if not candidate.is_absolute():
+                candidate = (PROJECT_ROOT / candidate)
+            candidate = candidate.resolve()
+            if not candidate.is_file():
+                error = f'{candidate} is not a readable file'
+            elif not any(read_ini(str(candidate)).get(s)
+                         for s in INI_SECTIONS):
+                error = (f'{candidate} has no usable [NIOS], [UDDI] or '
+                         f'[KENTIK] section')
+            else:
+                path = str(candidate)
+                logger.info('Using credentials file %s for this request', path)
+
+    if error:
+        logger.error('Credentials file rejected: %s', error)
+
+    return path, error
+
+
+def candidate_inis() -> list:
+    '''
+    Find ini files that could be used as credentials for this tool
+
+    Only file paths and the section names present are reported - never any
+    values.
+
+    Parameters:
+        None
+
+    Returns:
+        list: dicts with path, name and sections keys
+    '''
+    directories = [Path(CONFIG_FILE).expanduser().resolve().parent, PROJECT_ROOT]
+    directories.extend(EXTRA_INI_DIRS)
+
+    seen = set()
+    candidates = []
+    for directory in directories:
+        if not directory.is_dir():
+            continue
+        for path in sorted(directory.glob('*.ini')):
+            resolved = str(path.resolve())
+            if resolved in seen or len(candidates) >= MAX_INI_CANDIDATES:
+                continue
+            seen.add(resolved)
+            creds = read_ini(resolved)
+            sections = [s for s in INI_SECTIONS if creds.get(s)]
+            if sections:
+                candidates.append({'path': resolved,
+                                   'name': path.name,
+                                   'sections': sections})
+
+    logger.debug('Found %d candidate credentials file(s)', len(candidates))
+    return candidates
+
+
 def form_namespace(body: dict) -> Namespace:
     '''
     Turn a posted JSON body into the namespace build_config expects
@@ -123,18 +210,19 @@ def form_namespace(body: dict) -> Namespace:
     return Namespace(**fields)
 
 
-def cli_command(body: dict, extra: list = None) -> list:
+def cli_command(body: dict, config_file: str = '', extra: list = None) -> list:
     '''
     Build the CLI command line matching a posted form
 
     Parameters:
         body (dict): request JSON
+        config_file (str): resolved credentials ini file
         extra (list): additional arguments to append
 
     Returns:
         list: argv list for subprocess
     '''
-    command = [sys.executable, str(CLI_SCRIPT), '-c', CONFIG_FILE]
+    command = [sys.executable, str(CLI_SCRIPT), '-c', config_file or CONFIG_FILE]
     if YAML_FILE:
         command.extend(['-y', YAML_FILE])
     for field, option in VALUE_FIELDS.items():
@@ -175,12 +263,21 @@ def get_config():
     '''
     Report the non-secret configuration the server resolved
 
+    Accepts an optional config_file query parameter to preview a different
+    credentials ini without restarting the server.
+
     Returns:
         Response: JSON config summary
     '''
-    config = build_config(form_namespace({}), ini_file=CONFIG_FILE, yaml_file=YAML_FILE)
+    ini_file, error = resolve_config_file(request.args.get('config_file', ''))
+    if error:
+        return jsonify({'error': error}), 400
+
+    config = build_config(form_namespace({}), ini_file=ini_file, yaml_file=YAML_FILE)
     return jsonify({
-        'ini_file': CONFIG_FILE,
+        'ini_file': ini_file,
+        'default_ini_file': CONFIG_FILE,
+        'lock_config': LOCK_CONFIG,
         'yaml_file': YAML_FILE,
         'nios': {'gm': config.nios.gm,
                  'credentials': bool(config.nios.gm and config.nios.password),
@@ -198,6 +295,19 @@ def get_config():
     })
 
 
+@app.route('/api/inis', methods=['GET'])
+def get_inis():
+    '''
+    List the credentials ini files the operator can choose between
+
+    Returns:
+        Response: JSON list of candidates
+    '''
+    return jsonify({'default': CONFIG_FILE,
+                    'lock_config': LOCK_CONFIG,
+                    'candidates': candidate_inis()})
+
+
 @app.route('/api/keys', methods=['GET'])
 def get_keys():
     '''
@@ -206,11 +316,15 @@ def get_keys():
     Returns:
         Response: JSON key -> count, or an error
     '''
+    ini_file, error = resolve_config_file(request.args.get('config_file', ''))
+    if error:
+        return jsonify({'error': error}), 400
+
     body = {'source': request.args.get('source', 'uddi'),
             'network_view': request.args.get('network_view', ''),
             'ip_space': request.args.get('ip_space', ''),
             'site_key': 'placeholder'}
-    config = build_config(form_namespace(body), ini_file=CONFIG_FILE, yaml_file=YAML_FILE)
+    config = build_config(form_namespace(body), ini_file=ini_file, yaml_file=YAML_FILE)
 
     problems = [p for p in validate_source_credentials(config) if 'site EA/tag' not in p]
     if problems:
@@ -230,7 +344,11 @@ def post_plan():
         Response: JSON plan, or an error
     '''
     body = request.get_json(silent=True) or {}
-    config = build_config(form_namespace(body), ini_file=CONFIG_FILE, yaml_file=YAML_FILE)
+    ini_file, error = resolve_config_file(body.get('config_file', ''))
+    if error:
+        return jsonify({'error': error}), 400
+
+    config = build_config(form_namespace(body), ini_file=ini_file, yaml_file=YAML_FILE)
 
     problems = validate_source_credentials(config)
     if problems:
@@ -243,6 +361,7 @@ def post_plan():
 
     plan = build_plan(config, kentik)
     payload = plan.as_dict()
+    payload['ini_file'] = ini_file
     payload['kentik_available'] = kentik is not None
     payload['kentik_problems'] = kentik_problems
     payload['table'] = report.render_table(plan)
@@ -265,7 +384,11 @@ def post_apply():
     if not body.get('confirm'):
         return jsonify({'error': 'confirm must be true to apply the plan'}), 400
 
-    command = cli_command(body, ['--go'])
+    ini_file, error = resolve_config_file(body.get('config_file', ''))
+    if error:
+        return jsonify({'error': error}), 400
+
+    command = cli_command(body, ini_file, ['--go'])
     logger.info('Apply requested: %s', ' '.join(command))
 
     def generate():
@@ -304,6 +427,8 @@ def parseargs():
                         help='address to bind to (default: 127.0.0.1)')
     parser.add_argument('-p', '--port', type=int, default=5000,
                         help='port to listen on (default: 5000)')
+    parser.add_argument('--lock-config', action='store_true',
+                        help='refuse credentials ini overrides from the UI')
     parser.add_argument('--debug-flask', action='store_true',
                         help='enable Flask debug mode and auto-reload')
     parser.add_argument('-d', '--debug', action='store_true', help='enable debug logging')
@@ -336,15 +461,21 @@ def main() -> int:
     Returns:
         int: exit code
     '''
-    global CONFIG_FILE, YAML_FILE
+    global CONFIG_FILE, YAML_FILE, LOCK_CONFIG
     args = parseargs()
     setup_logging(args.debug)
 
     CONFIG_FILE = args.config
     YAML_FILE = args.yaml or ''
+    LOCK_CONFIG = args.lock_config
 
     logger.info('Credentials come from %s - operators of this UI act as that '
                 'identity', CONFIG_FILE)
+    if LOCK_CONFIG:
+        logger.info('Credentials file overrides from the UI are disabled')
+    else:
+        logger.info('Operators may point the UI at another readable ini file; '
+                    'use --lock-config to prevent that')
     logger.info('Serving on http://%s:%d', args.host, args.port)
     app.run(host=args.host, port=args.port, debug=args.debug_flask, threaded=True)
     return 0
