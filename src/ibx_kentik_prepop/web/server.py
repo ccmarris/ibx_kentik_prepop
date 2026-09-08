@@ -56,7 +56,7 @@ import sys
 from argparse import Namespace
 from pathlib import Path
 from flask import Flask, Response, jsonify, request, send_from_directory, stream_with_context
-from ibx_kentik_prepop import report
+from ibx_kentik_prepop import export, report
 from ibx_kentik_prepop.config import (DEFAULT_INI_FILE, INI_SECTIONS,
                                       build_config, read_ini,
                                       validate_kentik_credentials,
@@ -366,6 +366,51 @@ def post_plan():
     payload['kentik_problems'] = kentik_problems
     payload['table'] = report.render_table(plan)
     return jsonify(payload)
+
+
+@app.route('/api/export', methods=['POST'])
+def post_export():
+    '''
+    Build the plan and return every Kentik import artefact in one response
+
+    The plan is rebuilt server-side from the posted form, so the artefacts
+    always match the data as it is now rather than a cached dry run.
+
+    Returns:
+        Response: JSON with a files list of filename/note/content
+    '''
+    body = request.get_json(silent=True) or {}
+    ini_file, error = resolve_config_file(body.get('config_file', ''))
+    if error:
+        return jsonify({'error': error}), 400
+
+    config = build_config(form_namespace(body), ini_file=ini_file, yaml_file=YAML_FILE)
+    problems = validate_source_credentials(config)
+    if problems:
+        return jsonify({'error': '; '.join(problems)}), 400
+
+    kentik = None
+    if not validate_kentik_credentials(config):
+        kentik = KENTIK(config)
+
+    plan = build_plan(config, kentik)
+    include_unchanged = bool(body.get('export_include_unchanged'))
+    prefix = str(body.get('export_prefix') or 'kentik-import')
+
+    files = []
+    for export_format in export.applicable_formats(plan, include_unchanged):
+        files.append({
+            'format': export_format,
+            'filename': f'{prefix}{export.suffix_for(export_format)}',
+            'note': export.FORMAT_NOTES[export_format],
+            'content': export.render(plan, config, export_format, include_unchanged),
+        })
+
+    logger.info('Export built %d artefact(s) for %s', len(files), prefix)
+    return jsonify({'prefix': prefix,
+                    'stats': plan.stats(),
+                    'kentik_available': kentik is not None,
+                    'files': files})
 
 
 @app.route('/api/apply', methods=['POST'])

@@ -115,6 +115,39 @@ def test_inis_endpoint_lists_candidates_without_values(client, ini_file):
     assert 'test-key' not in str(payload)
 
 
+def test_export_endpoint_rejects_a_bad_override(client):
+    response = client.post('/api/export', json={'site_key': 'Site',
+                                                'config_file': '/nope.ini'})
+    assert response.status_code == 400
+
+
+def test_export_endpoint_requires_a_site_key(client):
+    response = client.post('/api/export', json={'source': 'uddi'})
+    assert response.status_code == 400
+    assert 'site EA/tag' in response.get_json()['error']
+
+
+def test_export_endpoint_returns_named_artefacts(client, monkeypatch):
+    from ibx_kentik_prepop.web import server as web
+    from ibx_kentik_prepop.model import ACTION_CREATE, Plan, SitePlan
+    from conftest import make_site
+
+    plan = Plan(source='uddi', site_key='Site')
+    plan.entries = [SitePlan(site=make_site('LON-DC1', ('10.1.0.0/24',)),
+                             action=ACTION_CREATE,
+                             merged={'user_access': ['10.1.0.0/24']})]
+    monkeypatch.setattr(web, 'build_plan', lambda config, kentik: plan)
+
+    payload = client.post('/api/export', json={'source': 'uddi',
+                                               'site_key': 'Site',
+                                               'export_prefix': 'tenant-a'}).get_json()
+    names = [f['filename'] for f in payload['files']]
+
+    assert names == ['tenant-a-sites.json', 'tenant-a-sites.csv']
+    assert '10.1.0.0/24' in payload['files'][0]['content']
+    assert payload['stats']['sites'] == 1
+
+
 def test_apply_still_requires_confirmation(client):
     response = client.post('/api/apply', json={'site_key': 'Site'})
     assert response.status_code == 400

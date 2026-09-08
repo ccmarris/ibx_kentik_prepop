@@ -73,6 +73,39 @@ DEVICE_WRITE_REFUSED = (
 )
 
 
+def build_device_payload(config, device: Device, site_id: str = '') -> dict:
+    '''
+    Build the v5 admin API request body for a device create
+
+    Not submitted by this tool - the payload is emitted in the report and the
+    export so it can be reviewed before any licensed device slot is consumed.
+
+    Parameters:
+        config (ProjectConfig): assembled configuration
+        device (Device): device candidate
+        site_id (str): Kentik site id the device belongs to
+
+    Returns:
+        dict: request body for POST /api/v5/device
+    '''
+    body = {
+        'device_name': sanitise_device_name(device.name),
+        'device_subtype': ROLE_TO_SUBTYPE.get(device.role, 'router'),
+        'device_description': ' '.join(v for v in (device.vendor, device.model,
+                                                   device.os_version) if v),
+        'device_sample_rate': config.device.sample_rate,
+        'sending_ips': list(device.sending_ips or ()),
+        'minimize_snmp': config.device.minimize_snmp,
+    }
+    if config.device.plan_id:
+        body['plan_id'] = config.device.plan_id
+    if site_id:
+        body['site_id'] = site_id
+    if device.mgmt_ip:
+        body['device_snmp_ip'] = device.mgmt_ip
+    return {'device': body}
+
+
 class KENTIK:
     '''
     Read and write Kentik sites, and read devices
@@ -289,9 +322,6 @@ class KENTIK:
         '''
         Build the v5 admin API request body for a device create
 
-        Not submitted in this version - the payload is emitted in the report so
-        it can be reviewed before any licensed device slot is consumed.
-
         Parameters:
             device (Device): device candidate
             site_id (str): Kentik site id the device belongs to
@@ -299,22 +329,7 @@ class KENTIK:
         Returns:
             dict: request body for POST /api/v5/device
         '''
-        body = {
-            'device_name': sanitise_device_name(device.name),
-            'device_subtype': ROLE_TO_SUBTYPE.get(device.role, 'router'),
-            'device_description': ' '.join(v for v in (device.vendor, device.model,
-                                                       device.os_version) if v),
-            'device_sample_rate': self.config.device.sample_rate,
-            'sending_ips': list(device.sending_ips or ()),
-            'minimize_snmp': self.config.device.minimize_snmp,
-        }
-        if self.config.device.plan_id:
-            body['plan_id'] = self.config.device.plan_id
-        if site_id:
-            body['site_id'] = site_id
-        if device.mgmt_ip:
-            body['device_snmp_ip'] = device.mgmt_ip
-        return {'device': body}
+        return build_device_payload(self.config, device, site_id)
 
     def create_device(self, device: Device, site_id: str = '') -> dict:
         '''

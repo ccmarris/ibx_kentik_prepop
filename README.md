@@ -97,6 +97,15 @@ Other useful runs:
 `-o csv --outfile plan.csv` writes `plan-sites.csv`, `plan-subnets.csv`,
 `plan-devices.csv` and `plan-warnings.csv`.
 
+Export the same plan as Kentik-shaped import artefacts:
+
+```bash
+./ibx_kentik_prepop.py --source uddi --site-key Site --devices --use-insight \
+    --export-kentik exports/tenant-a
+```
+
+See [Kentik import artefacts](#kentik-import-artefacts) for what each file is.
+
 Behaviour that isn't a credential can go in a YAML file
 (`-y config.yaml`); see `config.example.yaml`. API paths and the site type map
 live there too, so a moved endpoint is a config change rather than a code
@@ -150,6 +159,48 @@ preserved on update.
 Applied runs are recorded in `ibx_kentik_prepop_state.json` (site name, Kentik
 id, action, timestamp, and the last 50 run summaries).
 
+## Kentik import artefacts
+
+`--export-kentik PREFIX` writes the plan in shapes Kentik itself consumes, so
+you can hand the work to someone else, put it through a change process, or load
+it with Kentik's own tooling instead of letting this tool write:
+
+| File | What it is for |
+|---|---|
+| `PREFIX-sites.json` | Site API v202211 request bodies, each with the `method` and `path` to send it to. `POST` for new sites, `PUT /sites/{id}` for existing ones. |
+| `PREFIX-sites.csv` | Flat site table (title, type, action, id, one column per classification bucket) for review or exchange. |
+| `PREFIX-devices.json` | v5 admin API device request bodies, ready to `POST /api/v5/device`. |
+| `PREFIX-devices-add.csv` | The columns Kentik's own [`kentik_add_device.py`](https://github.com/kentik/kentik_add_device) loader reads: `siteid,devicename,devicedescription,sendingips,v6add,asn,devicesnmpcommunity,devicesamplerate,planid`. |
+| `PREFIX-devices-nms.csv` | The columns the portal's NMS bulk device import accepts: `name,address,agent_id`. `agent_id` is left empty — the portal then uses the first available agent. |
+
+Only artefacts with something in them are written; device files appear only when
+the run included `--devices`. Sites needing no change are excluded unless you
+pass `--export-include-unchanged`.
+
+Two things to know:
+
+- **Kentik does not import site CSV.** The portal's Sites page exports CSV but
+  will not ingest it, so `PREFIX-sites.json` is the artefact that can actually
+  be applied. The CSV is for humans.
+- **Create the sites before the devices.** A device carries `site_id`, and that
+  is only filled in for sites that already exist in Kentik — so either apply the
+  sites with `--go` first, or export again once they exist.
+
+Replaying the site JSON is a one-liner:
+
+```bash
+python3 - <<'EOF'
+import json, requests
+session = requests.Session()
+session.headers.update({'X-CH-Auth-Email': '...', 'X-CH-Auth-API-Token': '...'})
+for item in json.load(open('exports/tenant-a-sites.json')):
+    response = session.request(item['method'],
+                               'https://grpc.api.kentik.com' + item['path'],
+                               json=item['body'])
+    print(item['method'], item['path'], response.status_code)
+EOF
+```
+
 ## Devices
 
 Device candidates come from Network Insight (`--use-insight`, NIOS only),
@@ -177,7 +228,8 @@ Review the payloads, then create the devices in Kentik.
 Then open <http://127.0.0.1:5000>. The UI drives the same code: pick the
 credentials file, source and site key (both have pickers showing what is
 available), run a dry run, read the warnings, and apply — the apply run is
-streamed live as Server-Sent Events.
+streamed live as Server-Sent Events. **Build export** produces the same
+artefacts as `--export-kentik` with a download button per file.
 
 ### Switching credentials from the UI
 

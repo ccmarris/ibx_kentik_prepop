@@ -47,4 +47,5 @@ __author__ = 'Chris Marrison'
 __author_email__ = 'chris@infoblox.com'
 __license__ = 'BSD'
 
-__all__ = ['apply', 'cli', 'config', 'model', 'plan', 'report', 'summarise']
+__all__ = ['apply', 'cli', 'config', 'export', 'model', 'plan', 'report',
+           'summarise']

@@ -159,8 +159,16 @@ a { color: var(--ibx-green); text-decoration: underline; }
         <div class="check"><input type="checkbox" id="use_gateways"><label for="use_gateways">Infer from DHCP routers option</label></div>
       </fieldset>
 
+      <fieldset>
+        <legend>Export for Kentik</legend>
+        <label for="export_prefix">Filename prefix</label>
+        <input type="text" id="export_prefix" placeholder="kentik-import">
+        <div class="check"><input type="checkbox" id="export_include_unchanged"><label for="export_include_unchanged">Include sites needing no change</label></div>
+      </fieldset>
+
       <div class="actions">
         <button class="primary" id="run_plan">Dry run</button>
+        <button class="secondary" id="run_export">Build export</button>
         <button class="secondary" id="run_apply" disabled>Apply to Kentik</button>
       </div>
     </div>
@@ -198,6 +206,12 @@ a { color: var(--ibx-green); text-decoration: underline; }
       <h2>Device candidates</h2>
       <div class="scroll"><table id="devices_table"></table></div>
       <p class="hint">Devices are reported only. Creating them in Kentik consumes a licensed device slot, needs a plan_id, and needs the flow exporter source address, which is not necessarily the management IP shown here.</p>
+    </div>
+
+    <div class="card hidden" id="export_card">
+      <h2>Kentik import artefacts</h2>
+      <table id="export_table"></table>
+      <p class="hint">Kentik has no site CSV import, so the site JSON holds ready-to-send Site API v202211 request bodies. Create the sites before the devices: a device needs its <code>site_id</code>, which is only filled in for sites that already exist in Kentik.</p>
     </div>
 
     <div class="card hidden" id="log_card">

@@ -50,7 +50,7 @@ __license__ = 'BSD'
 import argparse
 import logging
 import sys
-from ibx_kentik_prepop import report
+from ibx_kentik_prepop import export, report
 from ibx_kentik_prepop.apply import apply_plan
 from ibx_kentik_prepop.config import (DEFAULT_INI_FILE, build_config,
                                       validate_kentik_credentials,
@@ -107,6 +107,11 @@ def parseargs():
     parser.add_argument('-o', '--output', choices=['table', 'csv', 'json'],
                         default='table', help='report format (default: table)')
     parser.add_argument('--outfile', help='write the report to this file')
+    parser.add_argument('--export-kentik', metavar='PREFIX',
+                        help='also write Kentik-shaped import artefacts using '
+                             'this path prefix, e.g. exports/tenant-a')
+    parser.add_argument('--export-include-unchanged', action='store_true',
+                        help='include sites needing no change in the export')
     parser.add_argument('--go', action='store_true',
                         help='apply the plan to Kentik (default is a dry run)')
     parser.add_argument('-c', '--config', default=DEFAULT_INI_FILE,
@@ -227,6 +232,16 @@ def main() -> int:
     plan = build_plan(config, kentik)
     text = report.render(plan, args.output, args.outfile or '', dry_run=not args.go)
     emit(text, args.output, args.outfile or '')
+
+    if args.export_kentik:
+        written = export.export(plan, config, args.export_kentik,
+                                args.export_include_unchanged)
+        if written:
+            print('\nKentik import artefacts:')
+            for path, note in written:
+                print(f'  {path}  ({note})')
+        else:
+            print('\nNothing to export - no sites need creating or updating.')
 
     if args.go:
         results = apply_plan(config, plan, kentik)

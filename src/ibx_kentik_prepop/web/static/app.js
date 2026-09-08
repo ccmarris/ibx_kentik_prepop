@@ -2,9 +2,10 @@
 
 const VALUE_FIELDS = ['config_file', 'source', 'site_key', 'class_key',
                       'site_type_key', 'network_view', 'ip_space', 'site_filter',
-                      'max_prefix_len'];
+                      'max_prefix_len', 'export_prefix'];
 const FLAG_FIELDS = ['include_address_blocks', 'replace_networks', 'devices',
-                     'use_insight', 'use_uai', 'use_gateways'];
+                     'use_insight', 'use_uai', 'use_gateways',
+                     'export_include_unchanged'];
 
 let currentPlan = null;
 
@@ -240,6 +241,78 @@ async function runPlan() {
   }
 }
 
+function downloadFile(filename, content) {
+  const blob = new Blob([content], { type: 'application/octet-stream' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
+function renderExport(data) {
+  const rows = (data.files || []).map(function (file) {
+    return '<tr><td>' + escapeHtml(file.filename) + '</td><td>' +
+      escapeHtml(file.note) + '</td><td>' +
+      (file.content.split('\n').length - 1) + '</td>' +
+      '<td><button class="secondary" data-format="' + escapeHtml(file.format) +
+      '">Download</button></td></tr>';
+  }).join('');
+  el('export_table').innerHTML =
+    '<thead><tr><th>file</th><th>what it is for</th><th>lines</th><th></th></tr>' +
+    '</thead><tbody>' + rows + '</tbody>';
+
+  el('export_table').querySelectorAll('button').forEach(function (button) {
+    button.addEventListener('click', function () {
+      const file = data.files.filter(function (candidate) {
+        return candidate.format === button.dataset.format;
+      })[0];
+      if (file) { downloadFile(file.filename, file.content); }
+    });
+  });
+  show('export_card', true);
+}
+
+async function runExport() {
+  const body = formBody();
+  if (!body.site_key) {
+    setStatus('A site EA/tag key is required.', true);
+    return;
+  }
+  el('run_export').disabled = true;
+  setStatus('Building the export...', false);
+  try {
+    const response = await fetch('/api/export', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    const data = await response.json();
+    if (!response.ok || data.error) {
+      setStatus(data.error || 'Export failed', true);
+      return;
+    }
+    if (!data.files.length) {
+      show('export_card', false);
+      setStatus('Nothing to export - no sites need creating or updating. ' +
+                'Tick "Include sites needing no change" to export them anyway.', false);
+      return;
+    }
+    renderExport(data);
+    setStatus(data.files.length + ' artefact(s) ready to download.' +
+              (data.kentik_available ? '' :
+               ' Kentik credentials are not configured, so every site is ' +
+               'exported as a create and no site ids are filled in.'), false);
+  } catch (error) {
+    setStatus('Export failed: ' + error, true);
+  } finally {
+    el('run_export').disabled = false;
+  }
+}
+
 async function runApply() {
   if (!currentPlan) { return; }
   const summary = currentPlan.stats.actions.create + ' site(s) will be created and ' +
@@ -307,6 +380,7 @@ el('config_file').addEventListener('change', function () {
 });
 el('load_keys').addEventListener('click', loadKeys);
 el('run_plan').addEventListener('click', runPlan);
+el('run_export').addEventListener('click', runExport);
 el('run_apply').addEventListener('click', runApply);
 loadConfig();
 loadInis();
