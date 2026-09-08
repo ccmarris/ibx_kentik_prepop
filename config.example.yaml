@@ -1,0 +1,78 @@
+# Optional behaviour config for ibx_kentik_prepop.
+#
+# Everything here has a working default, so the YAML file is only needed to
+# change site derivation behaviour or to correct an API path or field name
+# without editing code. Credentials never belong in this file - they live in
+# the ini.
+
+source: uddi
+
+site:
+  # EA (NIOS) or tag (UDDI) key holding the site name. Also settable with
+  # --site-key. Use --list-keys to see what is actually populated.
+  site_key: Site
+
+  # Optional EA/tag key overriding the Kentik address classification.
+  # Accepted values on the object: infrastructure | user_access | other
+  class_key: ''
+
+  # Optional EA/tag key holding the site type, mapped through site_type_map.
+  site_type_key: ''
+  default_site_type: SITE_TYPE_BRANCH
+  site_type_map:
+    dc: SITE_TYPE_DATA_CENTER
+    branch: SITE_TYPE_BRANCH
+    cloud: SITE_TYPE_CLOUD
+
+  # 0 disables aggregation beyond exact collapse. When set, summarised
+  # prefixes are aggregated up to this prefix length, but only where the
+  # supernet does not overlap another site's space.
+  max_prefix_len: 0
+
+  # Subnets at or below this prefix length are treated as infrastructure.
+  infra_prefix_len: 30
+
+  # Name/comment substrings that mark a subnet as infrastructure.
+  infra_patterns:
+    - mgmt
+    - management
+    - transit
+    - p2p
+    - loopback
+    - infra
+    - wan
+
+  include_address_blocks: false
+  replace_networks: false
+
+device:
+  enabled: false
+  use_insight: false
+  use_uai: false
+  use_gateways: false
+  roles:
+    - router
+    - switch
+    - firewall
+  # Needed only when device creation is enabled in a future version.
+  plan_id: 0
+  sample_rate: 1024
+  minimize_snmp: true
+
+# Endpoint and field overrides. Change these when an API path moves rather
+# than editing the code.
+uddi:
+  # base_url: https://csp.eu.infoblox.com
+  # asset_category: network
+  page_size: 1000
+
+nios:
+  wapi_version: v2.13.1
+  page_size: 1000
+
+kentik:
+  # base_url: https://api.kentik.eu
+  # grpc_base_url: https://grpc.api.kentik.eu
+  site_list: /site/v202211/sites
+
+state_file: ibx_kentik_prepop_state.json

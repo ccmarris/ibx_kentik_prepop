@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Infoblox to Kentik pre-population</title>
+<link href="https://fonts.googleapis.com/css2?family=Lato:wght@300;400;700;900&display=swap" rel="stylesheet">
+<style>
+:root {
+  --ibx-black: #101820;
+  --ibx-green: #00BD4D;
+  --ibx-white: #FFFFFF;
+  --ibx-off-white: #F0EFE9;
+  --ibx-steel: #D9E1E2;
+  --ibx-blue-gray: #202D37;
+  --ibx-text-muted: #5A6470;
+  --ibx-gradient-primary: linear-gradient(to right, #FEDD00 0%, #00BD4D 35%, #00BD4D 65%, #00E2EC 100%);
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--ibx-off-white);
+  color: var(--ibx-black);
+  font-family: 'Lato', sans-serif;
+  font-weight: 400;
+  font-size: 15px;
+  line-height: 1.5;
+}
+.brand-line { height: 2px; background: var(--ibx-gradient-primary); }
+header { padding: 24px 32px 16px; }
+h1 {
+  font-weight: 900;
+  font-size: 26px;
+  margin: 0 0 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+h1 .accent { color: var(--ibx-green); }
+h2 {
+  font-weight: 700;
+  font-size: 15px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin: 0 0 12px;
+}
+.sub { color: var(--ibx-text-muted); margin: 0; }
+main { padding: 0 32px 48px; display: grid; grid-template-columns: 360px 1fr; gap: 24px; align-items: start; }
+.card {
+  background: var(--ibx-white);
+  border: 1px solid var(--ibx-steel);
+  padding: 20px;
+  margin-bottom: 20px;
+}
+.card.rail { border-left: 4px solid var(--ibx-green); }
+label { display: block; font-weight: 700; font-size: 12px; text-transform: uppercase; letter-spacing: 0.6px; margin: 14px 0 4px; }
+label:first-of-type { margin-top: 0; }
+input[type=text], input[type=number], select {
+  width: 100%; padding: 8px 10px; border: 1px solid var(--ibx-steel);
+  background: var(--ibx-white); font-family: inherit; font-size: 14px; color: var(--ibx-black);
+}
+.check { display: flex; align-items: center; gap: 8px; margin: 8px 0; }
+.check label { margin: 0; text-transform: none; letter-spacing: 0; font-weight: 400; font-size: 14px; }
+.hint { color: var(--ibx-text-muted); font-size: 12px; margin: 4px 0 0; }
+fieldset { border: 0; border-top: 1px solid var(--ibx-steel); padding: 12px 0 0; margin: 18px 0 0; }
+legend { font-weight: 700; font-size: 12px; text-transform: uppercase; letter-spacing: 0.6px; padding: 0 6px 0 0; }
+button {
+  font-family: inherit; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px;
+  font-size: 13px; padding: 10px 18px; border: 2px solid var(--ibx-green); cursor: pointer;
+}
+button.primary { background: var(--ibx-green); color: var(--ibx-white); }
+button.secondary { background: transparent; color: var(--ibx-green); }
+button:disabled { border-color: var(--ibx-steel); color: var(--ibx-text-muted); background: var(--ibx-steel); cursor: not-allowed; }
+.actions { display: flex; gap: 10px; margin-top: 18px; flex-wrap: wrap; }
+.stats { display: flex; flex-wrap: wrap; gap: 24px; }
+.stat .value { font-weight: 900; font-size: 24px; display: block; }
+.stat .name { font-size: 12px; text-transform: uppercase; letter-spacing: 0.6px; color: var(--ibx-text-muted); }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th {
+  background: var(--ibx-green); color: var(--ibx-white); font-weight: 700; text-align: left;
+  padding: 8px 10px; text-transform: uppercase; font-size: 11px; letter-spacing: 0.6px;
+}
+td { padding: 7px 10px; border-bottom: 1px solid var(--ibx-steel); vertical-align: top; }
+tbody tr:nth-child(even) { background: var(--ibx-off-white); }
+.tag { font-weight: 700; font-size: 11px; text-transform: uppercase; letter-spacing: 0.6px; }
+.tag.create { color: var(--ibx-green); }
+.tag.update { color: var(--ibx-blue-gray); }
+.tag.nochange { color: var(--ibx-text-muted); }
+.scroll { max-height: 420px; overflow: auto; }
+pre.log {
+  background: var(--ibx-black); color: var(--ibx-white); padding: 14px; margin: 0;
+  font-size: 12px; line-height: 1.45; max-height: 320px; overflow: auto; white-space: pre-wrap;
+}
+.status { padding: 10px 14px; border-left: 4px solid var(--ibx-green); background: var(--ibx-white); border-top: 1px solid var(--ibx-steel); border-right: 1px solid var(--ibx-steel); border-bottom: 1px solid var(--ibx-steel); margin-bottom: 20px; }
+.status.error { border-left-color: #B4231E; }
+.muted { color: var(--ibx-text-muted); }
+.hidden { display: none; }
+a { color: var(--ibx-green); text-decoration: underline; }
+@media (max-width: 980px) { main { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="brand-line"></div>
+<header>
+  <h1>Infoblox to Kentik <span class="accent">pre-population</span></h1>
+  <p class="sub">Derive Kentik sites and their subnets from NIOS or Universal DDI data. Dry run first, apply when the plan looks right.</p>
+</header>
+
+<main>
+  <section>
+    <div class="card rail">
+      <h2>Source</h2>
+      <label for="source">Platform</label>
+      <select id="source">
+        <option value="uddi">Universal DDI (UDDI)</option>
+        <option value="nios">NIOS</option>
+      </select>
+
+      <label for="site_key">Site EA / tag key</label>
+      <input type="text" id="site_key" list="key_list" placeholder="Site">
+      <datalist id="key_list"></datalist>
+      <p class="hint"><a href="#" id="load_keys">Load the keys in use</a> to see which are populated.</p>
+
+      <label for="class_key">Classification EA / tag key (optional)</label>
+      <input type="text" id="class_key" placeholder="kentik_class">
+      <p class="hint">Values: infrastructure, user_access or other. Overrides the heuristic.</p>
+
+      <label for="site_type_key">Site type EA / tag key (optional)</label>
+      <input type="text" id="site_type_key">
+
+      <label for="network_view">NIOS network view (optional)</label>
+      <input type="text" id="network_view">
+
+      <label for="ip_space">UDDI IP space id (optional)</label>
+      <input type="text" id="ip_space">
+
+      <fieldset>
+        <legend>Scope</legend>
+        <label for="site_filter">Site name filter (glob)</label>
+        <input type="text" id="site_filter" placeholder="LON-*">
+        <label for="max_prefix_len">Aggregate up to prefix length</label>
+        <input type="number" id="max_prefix_len" min="1" max="32" placeholder="0 = exact collapse only">
+        <div class="check"><input type="checkbox" id="include_address_blocks"><label for="include_address_blocks">Include address blocks / containers</label></div>
+        <div class="check"><input type="checkbox" id="replace_networks"><label for="replace_networks">Replace Kentik network lists (default: add to them)</label></div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Devices (report only)</legend>
+        <div class="check"><input type="checkbox" id="devices"><label for="devices">Include device candidates</label></div>
+        <div class="check"><input type="checkbox" id="use_insight"><label for="use_insight">NIOS Network Insight</label></div>
+        <div class="check"><input type="checkbox" id="use_uai"><label for="use_uai">Universal Asset Insights</label></div>
+        <div class="check"><input type="checkbox" id="use_gateways"><label for="use_gateways">Infer from DHCP routers option</label></div>
+      </fieldset>
+
+      <div class="actions">
+        <button class="primary" id="run_plan">Dry run</button>
+        <button class="secondary" id="run_apply" disabled>Apply to Kentik</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Environment</h2>
+      <div id="env" class="muted">Loading...</div>
+    </div>
+  </section>
+
+  <section>
+    <div id="status" class="status hidden"></div>
+
+    <div class="card hidden" id="stats_card">
+      <h2>Plan summary</h2>
+      <div class="stats" id="stats"></div>
+    </div>
+
+    <div class="card hidden" id="warnings_card">
+      <h2>Warnings</h2>
+      <div class="scroll"><table id="warnings_table"></table></div>
+    </div>
+
+    <div class="card hidden" id="sites_card">
+      <h2>Sites</h2>
+      <div class="scroll"><table id="sites_table"></table></div>
+    </div>
+
+    <div class="card hidden" id="subnets_card">
+      <h2>Subnets</h2>
+      <div class="scroll"><table id="subnets_table"></table></div>
+    </div>
+
+    <div class="card hidden" id="devices_card">
+      <h2>Device candidates</h2>
+      <div class="scroll"><table id="devices_table"></table></div>
+      <p class="hint">Devices are reported only. Creating them in Kentik consumes a licensed device slot, needs a plan_id, and needs the flow exporter source address, which is not necessarily the management IP shown here.</p>
+    </div>
+
+    <div class="card hidden" id="log_card">
+      <h2>Apply log</h2>
+      <pre class="log" id="log"></pre>
+    </div>
+  </section>
+</main>
+<script src="/static/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,25 @@
+# Credentials for ibx_kentik_prepop. Copy to ibx_kentik.ini (or keep it in
+# ~/configs) and never commit the real file.
+#
+# Only the section for the source platform you use is required, plus [KENTIK]
+# when applying with --go. CLI flags and environment variables take priority
+# over the values here.
+
+[NIOS]
+gm = 192.168.1.10
+user = admin
+pass = infoblox
+wapi_version = v2.13.1
+valid_cert = false
+
+[UDDI]
+api_key = <service api key>
+# csp.eu.infoblox.com for EU tenants
+base_url = https://csp.infoblox.com
+
+[KENTIK]
+email = user@example.com
+token = <api token>
+# api.kentik.eu / grpc.api.kentik.eu for EU clusters
+base_url = https://api.kentik.com
+grpc_base_url = https://grpc.api.kentik.com
