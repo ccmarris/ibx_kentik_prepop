@@ -56,12 +56,15 @@ from argparse import Namespace
 from pathlib import Path
 from flask import Flask, Response, jsonify, request, send_from_directory, stream_with_context
 from ibx_kentik_prepop import export, report
-from ibx_kentik_prepop.apply import apply_plan
+from ibx_kentik_prepop.apply import apply_device_plan, apply_plan
 from ibx_kentik_prepop.config import (DEFAULT_INI_FILE, INI_SECTIONS,
                                       build_config, read_ini,
                                       validate_kentik_credentials,
                                       validate_source_credentials)
-from ibx_kentik_prepop.plan import build_plan, get_source, plan_fingerprint
+from ibx_kentik_prepop.model import TASK_DEVICES
+from ibx_kentik_prepop.plan import (build_device_plan, build_plan,
+                                    device_apply_problems, get_source,
+                                    plan_fingerprint)
 from ibx_kentik_prepop.targets.kentik import KENTIK
 
 logger = logging.getLogger(__name__)
@@ -88,26 +91,15 @@ app = Flask(__name__,
             static_url_path='/static')
 
 # Boolean form fields, mapped to their CLI flag
-FLAG_FIELDS = {
-    'include_address_blocks': '--include-address-blocks',
-    'replace_networks': '--replace-networks',
-    'devices': '--devices',
-    'use_insight': '--use-insight',
-    'use_uai': '--use-uai',
-    'use_gateways': '--use-gateways',
-}
+FLAG_FIELDS = ('include_address_blocks', 'devices',
+               'use_insight', 'use_uai', 'use_gateways', 'update_devices',
+               'allow_over_capacity')
 
 # String/int form fields, mapped to their CLI option
-VALUE_FIELDS = {
-    'source': '--source',
-    'site_key': '--site-key',
-    'class_key': '--class-key',
-    'site_type_key': '--site-type-key',
-    'network_view': '--network-view',
-    'ip_space': '--ip-space',
-    'site_filter': '--site-filter',
-    'max_prefix_len': '--max-prefix-len',
-}
+VALUE_FIELDS = ('task', 'source', 'site_key', 'class_key', 'site_type_key',
+                'network_view', 'ip_space', 'site_filter', 'max_prefix_len',
+                'device_mode', 'sending_ips', 'plan_name', 'plan_id',
+                'agent_id', 'credential_name', 'monitoring_template_id')
 
 
 def resolve_config_file(requested: str) -> tuple:
@@ -207,9 +199,32 @@ def form_namespace(body: dict) -> Namespace:
     for field in FLAG_FIELDS:
         fields[field] = bool(body.get(field))
     fields['gm'] = body.get('gm') or None
-    if fields.get('max_prefix_len'):
-        fields['max_prefix_len'] = int(fields['max_prefix_len'])
+    for numeric in ('max_prefix_len', 'plan_id', 'monitoring_template_id'):
+        if fields.get(numeric):
+            fields[numeric] = int(fields[numeric])
+    fields['exclude_device'] = [str(v) for v in (body.get('exclude_device') or [])]
+    fields['exclude_file'] = None
+    fields['sending_ip_map'] = {str(k): [str(a) for a in v]
+                                for k, v in (body.get('sending_ip_map') or {}).items()}
     return Namespace(**fields)
+
+
+def make_plan(config, kentik):
+    '''
+    Build the plan for the configured task
+
+    Parameters:
+        config (ProjectConfig): assembled configuration
+        kentik (KENTIK): Kentik target, or None
+
+    Returns:
+        tuple: (Plan, ProjectConfig) - the config may carry a resolved plan id
+    '''
+    if config.task == TASK_DEVICES:
+        plan, config = build_device_plan(config, kentik)
+    else:
+        plan = build_plan(config, kentik)
+    return plan, config
 
 
 @app.route('/')
@@ -342,6 +357,61 @@ def kentik_check():
                     'error': kentik.error_text()})
 
 
+@app.route('/api/kentik-plans', methods=['GET'])
+def kentik_plans():
+    '''
+    List the Kentik licence plans with their remaining device capacity
+
+    Returns:
+        Response: JSON list of plans
+    '''
+    ini_file, error = resolve_config_file(request.args.get('config_file', ''))
+    if error:
+        return jsonify({'error': error}), 400
+
+    config = build_config(form_namespace({}), ini_file=ini_file, yaml_file=YAML_FILE)
+    problems = validate_kentik_credentials(config)
+    if problems:
+        return jsonify({'error': '; '.join(problems)}), 400
+
+    kentik = KENTIK(config)
+    plans = [kentik.plan_capacity(p) for p in kentik.list_plans()]
+    return jsonify({'plans': plans, 'default': config.device.plan_name,
+                    'error': kentik.error_text()})
+
+
+@app.route('/api/kentik-nms', methods=['GET'])
+def kentik_nms():
+    '''
+    List the NMS agents and SNMP credential groups an NMS device can use
+
+    Returns:
+        Response: JSON with agents and credentials
+    '''
+    ini_file, error = resolve_config_file(request.args.get('config_file', ''))
+    if error:
+        return jsonify({'error': error}), 400
+
+    config = build_config(form_namespace({}), ini_file=ini_file, yaml_file=YAML_FILE)
+    problems = validate_kentik_credentials(config)
+    if problems:
+        return jsonify({'error': '; '.join(problems)}), 400
+
+    kentik = KENTIK(config)
+    agents = []
+    for agent in kentik.list_agents():
+        agents.append({'id': str(agent.get('id', '')),
+                       'name': str(agent.get('name')
+                                   or agent.get('alias')
+                                   or agent.get('hostname') or ''),
+                       'status': str(agent.get('status', ''))})
+    credentials = []
+    for credential in kentik.list_credentials():
+        credentials.append({'name': str(credential.get('name', '')),
+                            'id': str(credential.get('id', ''))})
+    return jsonify({'agents': agents, 'credentials': credentials})
+
+
 @app.route('/api/plan', methods=['POST'])
 def post_plan():
     '''
@@ -366,10 +436,12 @@ def post_plan():
     if not kentik_problems:
         kentik = KENTIK(config)
 
-    plan = build_plan(config, kentik)
+    plan, config = make_plan(config, kentik)
     payload = plan.as_dict()
     payload['ini_file'] = ini_file
     payload['fingerprint'] = plan_fingerprint(plan)
+    if config.task == TASK_DEVICES:
+        payload['apply_problems'] = device_apply_problems(config, plan)
     payload['kentik_available'] = kentik is not None
     payload['kentik_problems'] = kentik_problems
     payload['table'] = report.render_table(plan)
@@ -401,7 +473,7 @@ def post_export():
     if not validate_kentik_credentials(config):
         kentik = KENTIK(config)
 
-    plan = build_plan(config, kentik)
+    plan, config = make_plan(config, kentik)
     include_unchanged = bool(body.get('export_include_unchanged'))
     prefix = str(body.get('export_prefix') or 'kentik-import')
 
@@ -457,7 +529,7 @@ def post_apply():
         return jsonify({'error': '; '.join(problems)}), 400
 
     kentik = KENTIK(config)
-    plan = build_plan(config, kentik)
+    plan, config = make_plan(config, kentik)
     fingerprint = plan_fingerprint(plan)
 
     if fingerprint != expected:
@@ -469,7 +541,14 @@ def post_apply():
                         'fingerprint': fingerprint,
                         'expected': expected}), 409
 
-    logger.info('Applying plan %s from the web interface', fingerprint)
+    if config.task == TASK_DEVICES:
+        blocked = device_apply_problems(config, plan)
+        if blocked:
+            return jsonify({'error': '; '.join(blocked)}), 400
+
+    logger.info('Applying %s plan %s from the web interface', config.task,
+                fingerprint)
+    runner = apply_device_plan if config.task == TASK_DEVICES else apply_plan
 
     def generate():
         '''
@@ -479,7 +558,7 @@ def post_apply():
 
         def run():
             try:
-                apply_plan(config, plan, kentik, on_event=events.put)
+                runner(config, plan, kentik, on_event=events.put)
             except Exception as exc:
                 logger.exception('Apply failed')
                 events.put({'type': 'error', 'message': str(exc)})

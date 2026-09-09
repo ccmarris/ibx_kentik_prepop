@@ -51,7 +51,8 @@ import fnmatch
 import ipaddress
 import logging
 import re
-from ibx_kentik_prepop.config import ProjectConfig
+from collections import Counter
+from ibx_kentik_prepop.config import REQUIRED_ADDRESS_FIELDS, ProjectConfig
 from ibx_kentik_prepop.model import (CLASSIFICATIONS, CLASS_INFRASTRUCTURE,
                                      CLASS_OTHER, CLASS_USER_ACCESS, Site,
                                      SiteSubnet)
@@ -140,6 +141,143 @@ def sanitise_device_name(name: str) -> str:
     if len(clean) > DEVICE_NAME_MAX:
         clean = clean[:DEVICE_NAME_MAX].rstrip('_')
     return clean
+
+
+def tag_value(tags: dict, candidates) -> tuple:
+    '''
+    Find the first populated tag/EA among several candidate names
+
+    Parameters:
+        tags (dict): the record's tag or EA dictionary
+        candidates: candidate key names, in order of preference
+
+    Returns:
+        tuple: (value, the key it came from) - both empty when nothing matched
+    '''
+    found = ('', '')
+    for candidate in candidates or ():
+        for key, value in (tags or {}).items():
+            if key.casefold() != str(candidate).casefold():
+                continue
+            text = '' if value is None else str(value).strip()
+            if text:
+                found = (text, key)
+                break
+        if found[0]:
+            break
+    return found
+
+
+def _majority(values: list) -> tuple:
+    '''
+    Most common value in a list, and whether the list disagreed
+
+    Parameters:
+        values (list): candidate values
+
+    Returns:
+        tuple: (value, list of the other values seen)
+    '''
+    winner = ''
+    others = []
+    populated = [v for v in values if v]
+    if populated:
+        counts = Counter(populated)
+        winner = counts.most_common(1)[0][0]
+        others = sorted(v for v in counts if v != winner)
+    return winner, others
+
+
+def _coordinate(text: str, limit: float) -> float:
+    '''
+    Parse and range-check a coordinate
+
+    Parameters:
+        text (str): raw value
+        limit (float): absolute bound (90 for latitude, 180 for longitude)
+
+    Returns:
+        float: the coordinate, or None when unusable
+    '''
+    value = None
+    try:
+        candidate = float(str(text).strip())
+    except (TypeError, ValueError):
+        candidate = None
+    if candidate is not None and -limit <= candidate <= limit:
+        value = candidate
+    return value
+
+
+def extract_address(records: list, config: ProjectConfig) -> dict:
+    '''
+    Derive a Kentik postal address and coordinates from a site's subnet metadata
+
+    Kentik's PostalAddress requires address, city and country, so a partial
+    address is dropped rather than submitted. Coordinates are independent of the
+    address and are range-checked.
+
+    Parameters:
+        records (list): normalised source subnet records for one site
+        config (ProjectConfig): assembled configuration
+
+    Returns:
+        dict: postal, lat, lon, source (Kentik field -> EA/tag name) and notes
+    '''
+    result = {'postal': {}, 'lat': None, 'lon': None, 'source': {}, 'notes': []}
+
+    if not config.site.use_address:
+        return result
+
+    postal = {}
+    for field_name, candidates in config.site.address_keys.items():
+        hits = [tag_value(r.get('tags'), candidates) for r in records]
+        value, others = _majority([v for v, _ in hits])
+        if not value:
+            continue
+        postal[field_name] = value
+        result['source'][field_name] = next(k for v, k in hits if v == value)
+        if others:
+            result['notes'].append(
+                ('address_conflict',
+                 f'{field_name} differs across this site\'s subnets, using '
+                 f'{value!r}', ', '.join(others)))
+
+    missing = [f for f in REQUIRED_ADDRESS_FIELDS if not postal.get(f)]
+    if postal and missing:
+        result['notes'].append(
+            ('partial_address',
+             f'Postal address not submitted: Kentik requires '
+             f'{", ".join(REQUIRED_ADDRESS_FIELDS)} and '
+             f'{", ".join(missing)} is missing',
+             ', '.join(f'{k}={v}' for k, v in sorted(postal.items()))))
+    elif postal:
+        result['postal'] = postal
+
+    for field_name, limit in (('lat', 90.0), ('lon', 180.0)):
+        candidates = config.site.geo_keys.get(field_name, ())
+        hits = [tag_value(r.get('tags'), candidates) for r in records]
+        value, _ = _majority([v for v, _ in hits])
+        if not value:
+            continue
+        coordinate = _coordinate(value, limit)
+        if coordinate is None:
+            result['notes'].append(
+                ('bad_coordinate',
+                 f'{field_name} value {value!r} is not a number within '
+                 f'+/-{limit:g}, ignored', ''))
+        else:
+            result[field_name] = coordinate
+            result['source'][field_name] = next(k for v, k in hits if v == value)
+
+    if (result['lat'] is None) != (result['lon'] is None):
+        result['notes'].append(
+            ('partial_coordinates',
+             'Only one of latitude/longitude was found, so neither was used', ''))
+        result['lat'] = None
+        result['lon'] = None
+
+    return result
 
 
 def parse_network(cidr: str):
@@ -420,9 +558,17 @@ def build_sites(records: list, config: ProjectConfig) -> tuple:
         for category, message in notes:
             warnings.append((category, f'{name}: {message}', ''))
 
+        address = extract_address(grouped[key], config)
+        for category, message, detail in address['notes']:
+            warnings.append((category, f'{name}: {message}', detail))
+
         site = Site(name=name,
                     subnets=subnets,
-                    site_type=derive_site_type(grouped[key][0], config))
+                    site_type=derive_site_type(grouped[key][0], config),
+                    postal=address['postal'],
+                    lat=address['lat'],
+                    lon=address['lon'],
+                    address_source=address['source'])
         sites.append(site)
         logger.info('Site %s: %d source subnet(s) summarised to %d prefix(es)',
                     name, len(grouped[key]), len(subnets))

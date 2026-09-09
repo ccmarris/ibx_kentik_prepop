@@ -43,29 +43,23 @@ class FakeKentik:
         }
 
 
-def test_merge_networks_adds_by_default():
-    merged, added, removed = merge_networks({'user_access': ['10.1.0.0/24']},
-                                            {'user_access': ['192.168.0.0/24']},
-                                            replace=False)
+def test_merge_networks_only_ever_adds():
+    merged, added, extra = merge_networks({'user_access': ['10.1.0.0/24']},
+                                          {'user_access': ['192.168.0.0/24']})
+
     assert merged['user_access'] == ['10.1.0.0/24', '192.168.0.0/24']
     assert added['user_access'] == ['10.1.0.0/24']
-    assert removed == {}
+    assert extra['user_access'] == ['192.168.0.0/24']
 
 
-def test_merge_networks_replace_removes_unmanaged():
-    merged, added, removed = merge_networks({'user_access': ['10.1.0.0/24']},
-                                            {'user_access': ['192.168.0.0/24']},
-                                            replace=True)
-    assert merged['user_access'] == ['10.1.0.0/24']
-    assert removed['user_access'] == ['192.168.0.0/24']
+def test_merge_networks_no_change_when_kentik_already_has_them():
+    merged, added, extra = merge_networks({'user_access': ['10.1.0.0/24']},
+                                          {'user_access': ['10.1.0.0/24',
+                                                           '192.168.0.0/24']})
 
-
-def test_merge_networks_no_change():
-    merged, added, removed = merge_networks({'user_access': ['10.1.0.0/24']},
-                                            {'user_access': ['10.1.0.0/24']},
-                                            replace=False)
-    assert merged['user_access'] == ['10.1.0.0/24']
-    assert (added, removed) == ({}, {})
+    assert merged['user_access'] == ['10.1.0.0/24', '192.168.0.0/24']
+    assert added == {}
+    assert extra['user_access'] == ['192.168.0.0/24']
 
 
 def test_attach_devices_matches_case_insensitively():
@@ -110,6 +104,23 @@ def test_build_plan_diffs_existing_site(monkeypatch):
     assert actions == {'LON-DC1': ACTION_NO_CHANGE, 'NYC-BR2': ACTION_CREATE}
     lon = [e for e in plan.entries if e.site.name == 'LON-DC1'][0]
     assert lon.kentik_id == '42'
+
+
+def test_extra_prefixes_alone_do_not_make_an_update(monkeypatch):
+    config = make_config()
+    records = [record('10.1.0.0/24', site='LON-DC1')]
+    monkeypatch.setattr(plan_module, 'get_source', lambda cfg: FakeSource(records))
+
+    kentik = FakeKentik([{
+        'id': '42',
+        'title': 'LON-DC1',
+        'addressClassification': {'userAccessNetworks': ['10.1.0.0/24',
+                                                         '172.16.0.0/24']},
+    }])
+    entry = build_plan(config, kentik=kentik).entries[0]
+
+    assert entry.action == ACTION_NO_CHANGE
+    assert entry.extra['user_access'] == ['172.16.0.0/24']
 
 
 def test_build_plan_updates_when_a_prefix_is_missing(monkeypatch):

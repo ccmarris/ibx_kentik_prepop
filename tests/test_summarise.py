@@ -10,9 +10,10 @@ from ibx_kentik_prepop.model import (CLASS_INFRASTRUCTURE, CLASS_OTHER,
                                      CLASS_USER_ACCESS)
 from ibx_kentik_prepop.summarise import (aggregate, build_sites, classify_subnet,
                                          collapse, derive_site_type,
+                                         extract_address,
                                          find_cross_site_overlaps,
                                          normalise_site_name,
-                                         sanitise_device_name)
+                                         sanitise_device_name, tag_value)
 
 
 def nets(*cidrs):
@@ -160,3 +161,77 @@ def test_find_cross_site_overlaps():
                                          make_site('B', ('10.1.0.0/24',))])
     assert len(overlaps) == 1
     assert 'overlaps' in overlaps[0]
+
+
+def test_extract_address_needs_the_required_triple():
+    config = make_config()
+    complete = [record('10.1.0.0/24', tags={'Address': '1 High St',
+                                            'City': 'London',
+                                            'Country': 'United Kingdom',
+                                            'Postcode': 'EC1A 1AA'})]
+    address = extract_address(complete, config)
+
+    assert address['postal'] == {'address': '1 High St', 'city': 'London',
+                                 'country': 'United Kingdom',
+                                 'postal_code': 'EC1A 1AA'}
+    assert address['source']['city'] == 'City'
+    assert address['notes'] == []
+
+
+def test_extract_address_drops_a_partial_address():
+    config = make_config()
+    partial = [record('10.1.0.0/24', tags={'City': 'London'})]
+    address = extract_address(partial, config)
+
+    assert address['postal'] == {}
+    assert 'partial_address' in [c for c, _, _ in address['notes']]
+
+
+def test_extract_address_reads_coordinates_and_validates_them():
+    config = make_config()
+    good = extract_address([record('10.1.0.0/24',
+                                   tags={'Latitude': '51.5074',
+                                         'Longitude': '-0.1278'})], config)
+    assert (good['lat'], good['lon']) == (51.5074, -0.1278)
+    assert good['source']['lat'] == 'Latitude'
+
+    bad = extract_address([record('10.1.0.0/24',
+                                  tags={'latitude': '999', 'longitude': '0'})],
+                          config)
+    assert bad['lat'] is None
+    assert 'bad_coordinate' in [c for c, _, _ in bad['notes']]
+
+
+def test_extract_address_ignores_a_lone_coordinate():
+    config = make_config()
+    address = extract_address([record('10.1.0.0/24', tags={'lat': '51.5'})], config)
+
+    assert (address['lat'], address['lon']) == (None, None)
+    assert 'partial_coordinates' in [c for c, _, _ in address['notes']]
+
+
+def test_extract_address_takes_the_majority_and_warns():
+    config = make_config()
+    records = [record('10.1.0.0/24', tags={'address': 'A', 'city': 'London',
+                                           'country': 'UK'}),
+               record('10.1.1.0/24', tags={'address': 'A', 'city': 'London',
+                                           'country': 'UK'}),
+               record('10.1.2.0/24', tags={'address': 'B', 'city': 'London',
+                                           'country': 'UK'})]
+    address = extract_address(records, config)
+
+    assert address['postal']['address'] == 'A'
+    assert 'address_conflict' in [c for c, _, _ in address['notes']]
+
+
+def test_build_sites_attaches_the_address_to_the_site():
+    config = make_config()
+    records = [record('10.1.0.0/24', site='LON-DC1',
+                      tags={'Site': 'LON-DC1', 'address': '1 High St',
+                            'city': 'London', 'country': 'UK',
+                            'latitude': '51.5', 'longitude': '-0.12'})]
+    sites, _ = build_sites(records, config)
+
+    assert sites[0].postal['city'] == 'London'
+    assert sites[0].lat == 51.5
+    assert sites[0].address_source['lon'] == 'longitude'

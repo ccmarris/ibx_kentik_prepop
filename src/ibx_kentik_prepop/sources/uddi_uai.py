@@ -50,7 +50,7 @@ __license__ = 'BSD'
 import logging
 import requests
 from ibx_kentik_prepop.model import Device
-from ibx_kentik_prepop.sources.base import role_from_text, site_for_ip
+from ibx_kentik_prepop.sources.base import match_site, role_from_text
 from ibx_kentik_prepop.sources.uddi import UDDI
 
 logger = logging.getLogger(__name__)
@@ -121,6 +121,28 @@ class UAI(UDDI):
         return assets
 
     @staticmethod
+    def _addresses(asset: dict) -> list:
+        '''
+        Every address on an asset, tolerating the shapes the API returns
+
+        Parameters:
+            asset (dict): raw asset dict
+
+        Returns:
+            list: address strings
+        '''
+        addresses = asset.get('ip_addresses')
+        if isinstance(addresses, str):
+            addresses = [a.strip(' "[]') for a in addresses.split(',')]
+        found = []
+        for candidate in addresses or []:
+            if isinstance(candidate, dict):
+                candidate = candidate.get('address', '')
+            if candidate and str(candidate) not in found:
+                found.append(str(candidate))
+        return found
+
+    @staticmethod
     def _first_ip(asset: dict) -> str:
         '''
         Pick the first usable address from an asset's ip_addresses
@@ -156,24 +178,25 @@ class UAI(UDDI):
         '''
         devices = []
         for asset in self.search_assets(self.config.uddi.asset_category):
-            address = self._first_ip(asset)
+            addresses = self._addresses(asset)
+            address = addresses[0] if addresses else ''
             role = role_from_text(asset.get('type'), asset.get('model'),
                                   asset.get('category'))
-            site = str(asset.get('location', '') or '')
-            if not site:
-                site = site_for_ip(address, subnets or [])
-            devices.append(Device(
+            device = Device(
                 name=str(asset.get('name', '') or address),
                 mgmt_ip=address,
                 role=role,
                 vendor=str(asset.get('vendor', '')),
                 model=str(asset.get('model', '')),
                 os_version=str(asset.get('os_version', '')),
-                site_name=site,
-                sending_ips=(address,) if address else (),
+                interfaces=[{'name': '', 'address': a, 'description': '',
+                             'speed': '', 'type': ''} for a in addresses],
                 origin='uai',
                 raw=asset,
-            ))
+            )
+            device.site_name, device.site_match = match_site(
+                device, subnets or [], str(asset.get('location', '') or ''))
+            devices.append(device)
 
         logger.info('Normalised %d UAI device candidate(s)', len(devices))
         return devices

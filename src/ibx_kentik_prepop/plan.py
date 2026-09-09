@@ -51,14 +51,20 @@ import hashlib
 import json
 import logging
 from datetime import datetime, timezone
-from ibx_kentik_prepop.model import (ACTION_CREATE, ACTION_NO_CHANGE,
-                                     ACTION_UPDATE, CLASSIFICATIONS, Plan,
-                                     SitePlan)
+from dataclasses import replace
+from ibx_kentik_prepop.model import (ACTION_CREATE, ACTION_EXISTS,
+                                     ACTION_NO_CHANGE, ACTION_UPDATE,
+                                     CLASSIFICATIONS, DevicePlan, MODE_FLOW,
+                                     MODE_NMS, Plan, SitePlan, TASK_DEVICES,
+                                     TASK_SITES)
+from ibx_kentik_prepop.sources.base import match_site
 from ibx_kentik_prepop.sources.nios import NIOS
 from ibx_kentik_prepop.sources.nios_insight import NetworkInsight
 from ibx_kentik_prepop.sources.uddi import UDDI
 from ibx_kentik_prepop.sources.uddi_uai import UAI
-from ibx_kentik_prepop.summarise import build_sites, site_match_key
+from ibx_kentik_prepop.summarise import (build_sites, sanitise_device_name,
+                                          site_match_key)
+from ibx_kentik_prepop.targets.kentik import sending_ips_for
 
 logger = logging.getLogger(__name__)
 
@@ -78,14 +84,30 @@ def plan_fingerprint(plan) -> str:
     Returns:
         str: short hex digest
     '''
-    payload = []
+    payload = {'task': plan.task, 'sites': [], 'devices': [],
+               'device_mode': plan.device_mode, 'plan_id': plan.plan_id}
+
     for entry in sorted(plan.entries, key=lambda e: e.site.name.casefold()):
-        payload.append({
+        payload['sites'].append({
             'site': entry.site.name,
             'action': entry.action,
             'kentik_id': entry.kentik_id,
             'networks': {c: sorted(v) for c, v in sorted((entry.merged or {}).items())},
+            'postal': dict(sorted((entry.site.postal or {}).items())),
+            'lat': entry.site.lat,
+            'lon': entry.site.lon,
         })
+
+    for entry in sorted(plan.device_entries, key=lambda e: e.device.name.casefold()):
+        payload['devices'].append({
+            'device': entry.device.name,
+            'action': entry.action,
+            'kentik_id': entry.kentik_id,
+            'site_id': entry.site_id,
+            'excluded': entry.excluded,
+            'sending_ips': sorted(entry.device.sending_ips or ()),
+        })
+
     digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode('utf-8'))
     return digest.hexdigest()[:16]
 
@@ -179,42 +201,293 @@ def attach_devices(sites: list, devices: list, plan: Plan) -> None:
     return
 
 
-def merge_networks(derived: dict, existing: dict, replace: bool) -> tuple:
+def merge_networks(derived: dict, existing: dict) -> tuple:
     '''
-    Work out the network lists to submit and what changes
+    Work out the network lists to submit, and what Kentik holds that we do not
 
-    By default the derived prefixes are added to whatever Kentik already holds,
-    so prefixes added by hand in the portal survive. With replace set, the
-    derived lists become authoritative.
+    Kentik MERGES the address classification lists on a site PUT rather than
+    replacing them, and the Site API offers no field mask and no PATCH - so
+    nothing this tool submits can ever remove a prefix from a site. The lists
+    sent are therefore always the union of what Kentik holds and what was
+    derived, and prefixes Kentik holds that the Infoblox data does not account
+    for are reported as extras to be removed in the portal if unwanted.
 
     Parameters:
         derived (dict): classification -> list of derived CIDRs
         existing (dict): classification -> list of CIDRs already in Kentik
-        replace (bool): treat the derived lists as authoritative
 
     Returns:
-        tuple: (merged dict, added dict, removed dict)
+        tuple: (merged dict, added dict, extra dict)
     '''
     merged = {}
     added = {}
-    removed = {}
+    extra = {}
 
     for classification in CLASSIFICATIONS:
         derived_set = set(derived.get(classification, []))
         existing_set = set(existing.get(classification, []))
-        if replace:
-            final = derived_set
-        else:
-            final = existing_set | derived_set
+        final = existing_set | derived_set
+
         merged[classification] = sorted(final)
-        new = sorted(final - existing_set)
-        gone = sorted(existing_set - final)
+        new = sorted(derived_set - existing_set)
+        unaccounted = sorted(existing_set - derived_set)
         if new:
             added[classification] = new
-        if gone:
-            removed[classification] = gone
+        if unaccounted:
+            extra[classification] = unaccounted
 
-    return merged, added, removed
+    return merged, added, extra
+
+
+def is_excluded(device, patterns) -> tuple:
+    '''
+    Test a device against the exclusion list
+
+    A pattern matches the discovered name, the sanitised Kentik name or the
+    management address, case-insensitively.
+
+    Parameters:
+        device (Device): device candidate
+        patterns: exclusion patterns
+
+    Returns:
+        tuple: (excluded bool, the pattern that matched)
+    '''
+    excluded = False
+    matched = ''
+    candidates = {str(device.name).casefold(),
+                  sanitise_device_name(device.name).casefold(),
+                  str(device.mgmt_ip).casefold()}
+    for pattern in patterns or ():
+        if str(pattern).strip().casefold() in candidates:
+            excluded = True
+            matched = str(pattern)
+            break
+    return excluded, matched
+
+
+def device_mismatch(raw_device: dict, device, site_id: str, config) -> dict:
+    '''
+    Differences between a derived device and the one Kentik already holds
+
+    Only the two fields this tool derives are compared, because they are the
+    only ones it would ever change.
+
+    Parameters:
+        raw_device (dict): the device as returned by Kentik
+        device (Device): the derived device candidate
+        site_id (str): the site id this device should carry
+        config (ProjectConfig): assembled configuration
+
+    Returns:
+        dict: field -> {kentik, derived}, empty when they agree
+    '''
+    mismatch = {}
+
+    current_site = str(raw_device.get('site_id')
+                       or (raw_device.get('site') or {}).get('id') or '')
+    if site_id and current_site != str(site_id):
+        mismatch['site_id'] = {'kentik': current_site, 'derived': str(site_id)}
+
+    derived_ips = sending_ips_for(config, device)
+    current_ips = sorted(str(a) for a in (raw_device.get('sending_ips') or []))
+    if derived_ips and current_ips != sorted(derived_ips):
+        mismatch['sending_ips'] = {'kentik': current_ips, 'derived': derived_ips}
+
+    return mismatch
+
+
+def build_device_plan(config, kentik=None) -> tuple:
+    '''
+    Build the device desired state
+
+    IPAM subnets are still read, because they are what places a device on a
+    site, and existing Kentik sites are read to resolve the site ids devices
+    need. Devices are only ever created or (opt in) re-placed - never deleted.
+
+    Parameters:
+        config (ProjectConfig): assembled configuration
+        kentik (KENTIK): Kentik target, or None to plan everything as a create
+
+    Returns:
+        tuple: (Plan, ProjectConfig) - the config carries the resolved plan id
+    '''
+    plan = Plan(source=config.source,
+                site_key=config.site.site_key,
+                task=TASK_DEVICES,
+                device_mode=config.device.mode,
+                plan_name=config.device.plan_name,
+                generated=datetime.now(timezone.utc).isoformat(timespec='seconds'))
+
+    ipam_source = get_source(config)
+    records = ipam_source.get_subnets()
+    if not records:
+        plan.add_warning('no_subnets',
+                         'The source returned no subnets, so devices cannot be '
+                         'placed on sites',
+                         'check credentials, network view / IP space and filters')
+
+    sites, warnings = build_sites(records, config)
+    for category, message, detail in warnings:
+        plan.add_warning(category, message, detail)
+
+    device_source = get_device_source(config, ipam_source, plan)
+    devices = device_source.get_devices(records)
+    wanted = tuple(r.lower() for r in config.device.roles)
+    devices = [d for d in devices if not wanted or d.role in wanted]
+    plan.devices = devices
+
+    # Resolve the plan first: the id goes into every flow device payload.
+    if config.device.mode == MODE_FLOW:
+        capacity = None
+        warning = ''
+        if kentik is not None:
+            plans = kentik.list_plans()
+            if not plans:
+                plan.add_warning('plan_unavailable',
+                                 'The Kentik plans API returned nothing, so the '
+                                 'licence plan could not be determined',
+                                 kentik.error_text() or 'enter a plan id manually')
+            capacity, warning = kentik.resolve_plan(config.device.plan_name,
+                                                    config.device.plan_id, plans)
+        elif config.device.plan_id:
+            capacity = {'id': config.device.plan_id,
+                        'name': f'id {config.device.plan_id} (entered)',
+                        'max_devices': None, 'used': 0, 'remaining': None,
+                        'active': True}
+
+        if warning:
+            plan.add_warning('plan_selection', warning, '')
+
+        if capacity:
+            plan.capacity = capacity
+            plan.plan_id = int(capacity['id']) if capacity['id'] is not None else 0
+            plan.plan_name = capacity['name']
+            if plan.plan_id != config.device.plan_id:
+                config = replace(config, device=replace(config.device,
+                                                        plan_id=plan.plan_id))
+                if kentik is not None:
+                    kentik.use_config(config)
+        else:
+            plan.add_warning('plan_selection',
+                             'No licence plan could be resolved, so flow devices '
+                             'cannot be created',
+                             'enter a plan id, or switch to NMS mode')
+
+    if config.device.mode == MODE_NMS and not config.device.agent_id:
+        plan.add_warning('nms_agent',
+                         'NMS mode needs an agent - a device created without one '
+                         'never polls',
+                         'pick an agent before applying')
+
+    # Canonical spelling per site, so a device matched via a subnet tagged with
+    # a variant spelling still reports (and resolves) the same site as the site
+    # task created.
+    canonical = {site_match_key(site.name): site.name for site in sites}
+
+    site_ids = {}
+    if kentik is not None:
+        for key, raw_site in kentik.site_index().items():
+            site_ids[key] = str(raw_site.get('id', ''))
+
+    device_index = kentik.device_index() if kentik is not None else {}
+
+    unplaced = []
+    missing_sites = set()
+    for device in devices:
+        # The adapters place devices as they read them, because only they see
+        # the source's own location attribute. Anything still unplaced is
+        # matched here so every device source behaves the same way.
+        if not device.site_name:
+            device.site_name, device.site_match = match_site(device, records)
+        device.site_name = canonical.get(site_match_key(device.site_name),
+                                         device.site_name)
+        device.sending_ips = tuple(sending_ips_for(config, device))
+        site_id = site_ids.get(site_match_key(device.site_name), '')
+        if device.site_name and not site_id and kentik is not None:
+            missing_sites.add(device.site_name)
+        if not device.site_name:
+            unplaced.append(device.name or device.mgmt_ip)
+
+        entry = DevicePlan(device=device, site_id=site_id)
+        excluded, pattern = is_excluded(device, config.device.exclude)
+        if excluded:
+            entry.excluded = True
+            entry.exclude_reason = f'excluded by {pattern!r}'
+
+        raw_device = device_index.get(sanitise_device_name(device.name).casefold())
+        if raw_device is not None:
+            entry.kentik_id = str(raw_device.get('id', ''))
+            entry.mismatch = device_mismatch(raw_device, device, site_id, config)
+            if entry.mismatch and config.device.update_existing:
+                entry.action = ACTION_UPDATE
+            else:
+                entry.action = ACTION_EXISTS
+        else:
+            entry.action = ACTION_CREATE
+
+        plan.device_entries.append(entry)
+
+    if unplaced:
+        plan.add_warning('devices_without_site',
+                         f'{len(unplaced)} device(s) could not be placed on a site',
+                         ', '.join(unplaced[:20]))
+    if missing_sites:
+        plan.add_warning('sites_not_in_kentik',
+                         f'{len(missing_sites)} site(s) do not exist in Kentik yet, '
+                         f'so those devices would be created without a site',
+                         ', '.join(sorted(missing_sites)[:20]))
+
+    creates = sum(1 for e in plan.device_entries
+                  if not e.excluded and e.action == ACTION_CREATE)
+    remaining = (plan.capacity or {}).get('remaining')
+    if remaining is not None and creates > remaining:
+        plan.add_warning('plan_capacity',
+                         f'{creates} device(s) to create exceeds the {remaining} '
+                         f'slot(s) left on plan {plan.plan_name!r}',
+                         'exclude devices, pick another plan, or allow over capacity')
+
+    stats = plan.stats()
+    logger.info('Device plan: %d candidate(s) - %d create, %d exists, %d update, '
+                '%d excluded, %d warning(s)',
+                stats['device_entries'], stats['device_actions'][ACTION_CREATE],
+                stats['device_actions'][ACTION_EXISTS],
+                stats['device_actions'][ACTION_UPDATE],
+                stats['excluded_devices'], stats['warnings'])
+    return plan, config
+
+
+def device_apply_problems(config, plan) -> list:
+    '''
+    Reasons a device apply must not proceed
+
+    Parameters:
+        config (ProjectConfig): assembled configuration
+        plan (Plan): the device plan
+
+    Returns:
+        list: blocking problems, empty when the apply may run
+    '''
+    problems = []
+    creates = sum(1 for e in plan.included_devices() if e.action == ACTION_CREATE)
+
+    if config.device.mode == MODE_NMS and not config.device.agent_id:
+        problems.append('NMS mode needs an agent to be selected')
+
+    if config.device.mode == MODE_FLOW and creates and not plan.plan_id:
+        problems.append('No licence plan id - the API did not return one, so '
+                        'enter the plan id manually')
+
+    remaining = (plan.capacity or {}).get('remaining')
+    if (creates and remaining is not None and creates > remaining
+            and not config.device.allow_over_capacity):
+        problems.append(f'{creates} device(s) to create exceeds the {remaining} '
+                        f'slot(s) left on plan {plan.plan_name!r} - exclude some '
+                        f'devices or allow over capacity to proceed')
+
+    for problem in problems:
+        logger.error('Device apply blocked: %s', problem)
+    return problems
 
 
 def build_plan(config, kentik=None) -> Plan:
@@ -231,6 +504,7 @@ def build_plan(config, kentik=None) -> Plan:
     '''
     plan = Plan(source=config.source,
                 site_key=config.site.site_key,
+                task=TASK_SITES,
                 generated=datetime.now(timezone.utc).isoformat(timespec='seconds'))
 
     ipam_source = get_source(config)
@@ -255,6 +529,13 @@ def build_plan(config, kentik=None) -> Plan:
         attach_devices(sites, kept, plan)
         plan.devices = kept
 
+    for site in sites:
+        for field_name, key in site.address_source.items():
+            plan.address_keys.setdefault(field_name, key)
+    if plan.address_keys:
+        logger.info('Address/geo data taken from: %s',
+                    ', '.join(f'{k}<-{v}' for k, v in sorted(plan.address_keys.items())))
+
     index = {}
     if kentik is not None:
         index = kentik.site_index()
@@ -269,12 +550,11 @@ def build_plan(config, kentik=None) -> Plan:
                              merged=derived)
         else:
             existing = kentik.existing_networks(raw_site)
-            merged, added, removed = merge_networks(derived, existing,
-                                                    config.site.replace_networks)
-            action = ACTION_UPDATE if (added or removed) else ACTION_NO_CHANGE
+            merged, added, extra = merge_networks(derived, existing)
+            action = ACTION_UPDATE if added else ACTION_NO_CHANGE
             entry = SitePlan(site=site, action=action,
                              kentik_id=str(raw_site.get('id', '')),
-                             added=added, removed=removed, merged=merged,
+                             added=added, extra=extra, merged=merged,
                              raw_site=raw_site)
         plan.entries.append(entry)
 

@@ -18,7 +18,7 @@ def write(tmp_path, text, name='creds.ini'):
 def config_for(ini_file):
     args = Namespace(source='uddi', site_key='Site', class_key=None,
                      site_type_key=None, max_prefix_len=None, site_filter=None,
-                     include_address_blocks=False, replace_networks=False,
+                     include_address_blocks=False,
                      devices=False, use_insight=False, use_uai=False,
                      use_gateways=False, network_view=None, ip_space=None,
                      gm=None)

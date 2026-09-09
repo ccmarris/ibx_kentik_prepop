@@ -43,7 +43,20 @@ site:
     - wan
 
   include_address_blocks: false
-  replace_networks: false
+
+  # Kentik postal address and coordinates. Candidate EA/tag names per Kentik
+  # field, matched case-insensitively, first hit wins. PostalAddress requires
+  # address, city and country, so a partial address is reported and dropped.
+  use_address: true
+  address_keys:
+    address: [address, street, street_address, site_address]
+    city: [city, town]
+    region: [region, state, county, province]
+    postal_code: [postal_code, postcode, zip, zip_code]
+    country: [country, country_code]
+  geo_keys:
+    lat: [latitude, lat]
+    lon: [longitude, long, lon, lng]
 
 device:
   enabled: false
@@ -54,10 +67,37 @@ device:
     - router
     - switch
     - firewall
-  # Needed only when device creation is enabled in a future version.
+
+  # flow (default) or nms - both use the same device API, the mode decides
+  # which fields are populated.
+  mode: flow
+  subtype: router
+
+  # Licence plan for flow devices, resolved by name against GET /api/v5/plans.
+  # Set plan_id when licensing is not visible to the service account, or to
+  # pin a specific plan.
+  plan_name: Free_Flow
   plan_id: 0
   sample_rate: 1024
   minimize_snmp: true
+
+  # mgmt (default) = the management address only; all = every discovered
+  # interface address. Override per device in the web UI.
+  sending_ips: mgmt
+
+  # NMS only. An agent is required - a device created without one never polls.
+  agent_id: ''
+  credential_name: ''
+  snmp_port: 161
+  monitoring_template_id: 0
+
+  # Devices that already exist are reported, not touched, unless this is set -
+  # and then only their site and sending IPs change.
+  update_existing: false
+  allow_over_capacity: false
+
+  # Names or management IPs to skip.
+  exclude: []
 
 # Endpoint and field overrides. Change these when an API path moves rather
 # than editing the code.

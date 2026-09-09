@@ -86,6 +86,18 @@ ROLE_OTHER = 'other'
 ACTION_CREATE = 'create'
 ACTION_UPDATE = 'update'
 ACTION_NO_CHANGE = 'no-change'
+ACTION_EXISTS = 'exists'
+
+# What the importer is working on
+TASK_SITES = 'sites'
+TASK_DEVICES = 'devices'
+TASKS = (TASK_SITES, TASK_DEVICES)
+
+# How a device is created in Kentik. Both go through the same device API - the
+# mode decides which fields are populated.
+MODE_FLOW = 'flow'
+MODE_NMS = 'nms'
+DEVICE_MODES = (MODE_FLOW, MODE_NMS)
 
 
 @dataclass
@@ -121,8 +133,23 @@ class Device:
     os_version: str = ''
     site_name: str = ''
     sending_ips: tuple = ()
+    interfaces: list = field(default_factory=list)
+    site_match: str = ''
     origin: str = ''
     raw: dict = field(default_factory=dict, repr=False)
+
+    def addresses(self) -> list:
+        '''
+        Every address known for this device, management address first
+
+        Returns:
+            list: de-duplicated addresses
+        '''
+        found = []
+        for address in [self.mgmt_ip] + [i.get('address', '') for i in self.interfaces]:
+            if address and address not in found:
+                found.append(address)
+        return found
 
     def as_dict(self, include_raw: bool = False) -> dict:
         '''
@@ -152,6 +179,7 @@ class Site:
     postal: dict = field(default_factory=dict)
     lat: float = None
     lon: float = None
+    address_source: dict = field(default_factory=dict)
     devices: list = field(default_factory=list)
 
     def networks(self, classification: str) -> list:
@@ -200,6 +228,7 @@ class Site:
             'postal': self.postal,
             'lat': self.lat,
             'lon': self.lon,
+            'address_source': self.address_source,
             'counts': self.counts(),
             'source_count': self.source_count(),
             'subnets': [s.as_dict() for s in self.subnets],
@@ -216,7 +245,7 @@ class SitePlan:
     action: str = ACTION_CREATE
     kentik_id: str = ''
     added: dict = field(default_factory=dict)
-    removed: dict = field(default_factory=dict)
+    extra: dict = field(default_factory=dict)
     merged: dict = field(default_factory=dict)
     raw_site: dict = field(default_factory=dict, repr=False)
 
@@ -231,8 +260,40 @@ class SitePlan:
         data['action'] = self.action
         data['kentik_id'] = self.kentik_id
         data['added'] = self.added
-        data['removed'] = self.removed
+        data['extra'] = self.extra
         data['merged'] = self.merged
+        return data
+
+
+@dataclass
+class DevicePlan:
+    '''
+    The intended outcome for one device
+    '''
+    device: Device
+    action: str = ACTION_CREATE
+    kentik_id: str = ''
+    site_id: str = ''
+    excluded: bool = False
+    exclude_reason: str = ''
+    mismatch: dict = field(default_factory=dict)
+
+    def as_dict(self) -> dict:
+        '''
+        Render as a plain dict for JSON output
+
+        Returns:
+            dict: serialisable representation
+        '''
+        from ibx_kentik_prepop.summarise import sanitise_device_name
+        data = self.device.as_dict()
+        data['kentik_name'] = sanitise_device_name(self.device.name)
+        data['action'] = self.action
+        data['kentik_id'] = self.kentik_id
+        data['site_id'] = self.site_id
+        data['excluded'] = self.excluded
+        data['exclude_reason'] = self.exclude_reason
+        data['mismatch'] = self.mismatch
         return data
 
 
@@ -263,10 +324,16 @@ class Plan:
     source: str = ''
     site_key: str = ''
     generated: str = ''
+    task: str = TASK_SITES
     entries: list = field(default_factory=list)
     devices: list = field(default_factory=list)
+    device_entries: list = field(default_factory=list)
     warnings: list = field(default_factory=list)
-    device_writes_enabled: bool = False
+    device_mode: str = MODE_FLOW
+    plan_id: int = 0
+    plan_name: str = ''
+    capacity: dict = field(default_factory=dict)
+    address_keys: dict = field(default_factory=dict)
 
     def add_warning(self, category: str, message: str, detail: str = '') -> None:
         '''
@@ -284,6 +351,15 @@ class Plan:
         self.warnings.append(Warning(category=category, message=message, detail=detail))
         return
 
+    def included_devices(self) -> list:
+        '''
+        Device plan entries that are not excluded
+
+        Returns:
+            list: list of DevicePlan
+        '''
+        return [e for e in self.device_entries if not e.excluded]
+
     def stats(self) -> dict:
         '''
         Summary counters for the plan
@@ -298,12 +374,23 @@ class Plan:
             actions[entry.action] = actions.get(entry.action, 0) + 1
             subnets += len(entry.site.subnets)
             sources += entry.site.source_count()
+
+        device_actions = {ACTION_CREATE: 0, ACTION_EXISTS: 0, ACTION_UPDATE: 0}
+        for entry in self.device_entries:
+            if entry.excluded:
+                continue
+            device_actions[entry.action] = device_actions.get(entry.action, 0) + 1
+
         return {
+            'task': self.task,
             'sites': len(self.entries),
             'actions': actions,
             'summarised_subnets': subnets,
             'source_subnets': sources,
             'devices': len(self.devices),
+            'device_actions': device_actions,
+            'device_entries': len(self.device_entries),
+            'excluded_devices': sum(1 for e in self.device_entries if e.excluded),
             'warnings': len(self.warnings),
         }
 
@@ -318,9 +405,15 @@ class Plan:
             'source': self.source,
             'site_key': self.site_key,
             'generated': self.generated,
-            'device_writes_enabled': self.device_writes_enabled,
+            'task': self.task,
+            'device_mode': self.device_mode,
+            'plan_id': self.plan_id,
+            'plan_name': self.plan_name,
+            'capacity': self.capacity,
+            'address_keys': self.address_keys,
             'stats': self.stats(),
             'sites': [e.as_dict() for e in self.entries],
             'devices': [d.as_dict() for d in self.devices],
+            'device_entries': [e.as_dict() for e in self.device_entries],
             'warnings': [w.as_dict() for w in self.warnings],
         }

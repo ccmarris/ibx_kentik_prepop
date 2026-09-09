@@ -49,7 +49,8 @@ __license__ = 'BSD'
 
 import logging
 import requests
-from ibx_kentik_prepop.model import CLASSIFICATIONS, CLASS_TO_KENTIK, Device, Site
+from ibx_kentik_prepop.model import (CLASSIFICATIONS, CLASS_TO_KENTIK, Device,
+                                     MODE_NMS, Site)
 from ibx_kentik_prepop.summarise import sanitise_device_name, site_match_key
 
 logger = logging.getLogger(__name__)
@@ -64,21 +65,52 @@ ROLE_TO_SUBTYPE = {
     'other': 'router',
 }
 
-DEVICE_WRITE_REFUSED = (
-    'Kentik device creation is not enabled in this version. Each device '
-    'consumes a licensed device slot, requires a plan_id, and needs the flow '
-    'exporter source address (which is not necessarily the discovered '
-    'management IP). Review the device section of the report, then create the '
-    'devices in Kentik with the payloads shown.'
+# Kentik device names accept 4-60 characters of alphanumerics and underscores;
+# creation consumes a licensed device slot from the plan, which is why the
+# apply checks remaining capacity before writing.
+DEVICE_LICENCE_NOTE = (
+    'Each device created consumes a licensed device slot on the selected plan. '
+    'For flow devices, sending_ips must be the flow exporter source address - '
+    'a device whose sending IP never sends flow will sit idle.'
 )
+
+
+def sending_ips_for(config, device: Device) -> list:
+    '''
+    Work out the flow exporter source addresses for a device
+
+    An explicit per-device selection wins; otherwise the policy is either the
+    management address alone (the default) or every discovered address.
+
+    Parameters:
+        config (ProjectConfig): assembled configuration
+        device (Device): device candidate
+
+    Returns:
+        list: addresses to submit as sending_ips
+    '''
+    chosen = config.device.sending_ip_map.get(device.name)
+    if chosen is None:
+        chosen = config.device.sending_ip_map.get(sanitise_device_name(device.name))
+
+    if chosen is not None:
+        addresses = [a for a in chosen if a]
+    elif config.device.sending_ips == 'all':
+        addresses = device.addresses()
+    else:
+        addresses = [device.mgmt_ip] if device.mgmt_ip else []
+
+    return list(dict.fromkeys(addresses))
 
 
 def build_device_payload(config, device: Device, site_id: str = '') -> dict:
     '''
-    Build the v5 admin API request body for a device create
+    Build the device API request body for the configured mode
 
-    Not submitted by this tool - the payload is emitted in the report and the
-    export so it can be reviewed before any licensed device slot is consumed.
+    Flow devices carry the plan, sample rate and sending IPs; NMS devices carry
+    the nms block with the agent and SNMP credential. Both go to the same
+    endpoint - only the populated fields differ.
+    (Verified against kentik/api-schema-public device/v202504beta2.)
 
     Parameters:
         config (ProjectConfig): assembled configuration
@@ -86,23 +118,37 @@ def build_device_payload(config, device: Device, site_id: str = '') -> dict:
         site_id (str): Kentik site id the device belongs to
 
     Returns:
-        dict: request body for POST /api/v5/device
+        dict: request body for POST /device/v202504beta2/device
     '''
     body = {
         'device_name': sanitise_device_name(device.name),
-        'device_subtype': ROLE_TO_SUBTYPE.get(device.role, 'router'),
         'device_description': ' '.join(v for v in (device.vendor, device.model,
                                                    device.os_version) if v),
-        'device_sample_rate': config.device.sample_rate,
-        'sending_ips': list(device.sending_ips or ()),
-        'minimize_snmp': config.device.minimize_snmp,
     }
-    if config.device.plan_id:
-        body['plan_id'] = config.device.plan_id
     if site_id:
-        body['site_id'] = site_id
-    if device.mgmt_ip:
-        body['device_snmp_ip'] = device.mgmt_ip
+        body['site_id'] = int(site_id) if str(site_id).isdigit() else site_id
+
+    if config.device.mode == MODE_NMS:
+        nms = {'ip_address': device.mgmt_ip}
+        if config.device.agent_id:
+            nms['agent_id'] = config.device.agent_id
+        if config.device.credential_name:
+            nms['snmp'] = {'credential_name': config.device.credential_name,
+                           'port': config.device.snmp_port}
+        body['nms'] = nms
+        if config.device.monitoring_template_id:
+            body['monitoring_template_id'] = config.device.monitoring_template_id
+    else:
+        body['device_subtype'] = ROLE_TO_SUBTYPE.get(device.role,
+                                                     config.device.subtype)
+        body['device_sample_rate'] = config.device.sample_rate
+        body['sending_ips'] = sending_ips_for(config, device)
+        body['minimize_snmp'] = config.device.minimize_snmp
+        if config.device.plan_id:
+            body['plan_id'] = config.device.plan_id
+        if device.mgmt_ip:
+            body['device_snmp_ip'] = device.mgmt_ip
+
     return {'device': body}
 
 
@@ -140,6 +186,24 @@ class KENTIK:
         logger.debug('Kentik target initialised (sites via %s, devices via %s)',
                      self.kentik.grpc_base_url, self.kentik.base_url)
         return
+
+    def use_config(self, config) -> 'KENTIK':
+        '''
+        Adopt an updated configuration
+
+        Needed because the plan id is only known after the plan has been
+        resolved against the account, and every device payload built by this
+        client has to carry it.
+
+        Parameters:
+            config (ProjectConfig): the updated configuration
+
+        Returns:
+            KENTIK: self, for chaining
+        '''
+        self.config = config
+        self.kentik = config.kentik
+        return self
 
     def _request(self, method: str, url: str, body: dict = None) -> dict:
         '''
@@ -329,12 +393,12 @@ class KENTIK:
 
     def get_devices(self) -> list:
         '''
-        Retrieve every device from Kentik (v5 admin API)
+        Retrieve every device from Kentik
 
         Returns:
             list: raw device dicts, empty list on failure
         '''
-        url = f'{self.kentik.base_url}{self.kentik.device_list}'
+        url = f'{self.kentik.grpc_base_url}{self.kentik.device_list}'
         payload = self._request('GET', url)
         devices = []
         if isinstance(payload, dict):
@@ -342,31 +406,245 @@ class KENTIK:
         logger.info('Retrieved %d existing Kentik device(s)', len(devices))
         return devices
 
-    def device_payload(self, device: Device, site_id: str = '') -> dict:
+    def device_index(self, devices: list = None) -> dict:
         '''
-        Build the v5 admin API request body for a device create
+        Index existing devices by their Kentik device name
+
+        Parameters:
+            devices (list): raw device dicts, fetched when not supplied
+
+        Returns:
+            dict: casefolded device_name -> raw device dict
+        '''
+        if devices is None:
+            devices = self.get_devices()
+        index = {}
+        for device in devices:
+            name = str(device.get('device_name') or device.get('deviceName') or '')
+            if name:
+                index[name.casefold()] = device
+        return index
+
+    def create_device(self, device: Device, site_id: str = '') -> dict:
+        '''
+        Create a device in Kentik
 
         Parameters:
             device (Device): device candidate
             site_id (str): Kentik site id the device belongs to
 
         Returns:
-            dict: request body for POST /api/v5/device
+            dict: created device dict, or None on failure
         '''
-        return build_device_payload(self.config, device, site_id)
+        url = f'{self.kentik.grpc_base_url}{self.kentik.device_create}'
+        body = build_device_payload(self.config, device, site_id)
+        payload = self._request('POST', url, body)
+        created = None
+        if isinstance(payload, dict):
+            created = payload.get('device', payload)
+            logger.info('Created Kentik device %s (id %s)',
+                        body['device']['device_name'], created.get('id', 'unknown'))
+        return created
 
-    def create_device(self, device: Device, site_id: str = '') -> dict:
+    def get_device(self, device_id: str) -> dict:
         '''
-        Refuse to create a device
+        Read one device from Kentik
 
-        Device writes are deliberately not enabled in this version.
+        Parameters:
+            device_id (str): Kentik device id
+
+        Returns:
+            dict: raw device dict, or None on failure
+        '''
+        path = self.kentik.device_read.format(device_id=device_id)
+        url = f'{self.kentik.grpc_base_url}{path}'
+        payload = self._request('GET', url)
+        device = None
+        if isinstance(payload, dict):
+            device = payload.get('device', payload)
+        return device
+
+    def update_device_placement(self, raw_device: dict, device: Device,
+                                site_id: str = '') -> dict:
+        '''
+        Update only the site and sending IPs of an existing device
+
+        Read-modify-write: the device as Kentik holds it is the base, and just
+        the two fields this tool derives are replaced, so monitoring
+        configuration it knows nothing about survives the PUT.
+
+        Parameters:
+            raw_device (dict): the device as returned by Kentik
+            device (Device): the derived device candidate
+            site_id (str): Kentik site id the device belongs to
+
+        Returns:
+            dict: updated device dict, or None on failure
+        '''
+        device_id = str(raw_device.get('id', ''))
+        body = {k: v for k, v in raw_device.items()
+                if k not in ('id', 'created_date', 'updated_date', 'company_id',
+                             'device_status', 'interfaces', 'labels', 'plan',
+                             'site', 'custom_columns', 'cdn_attr')}
+        if site_id:
+            body['site_id'] = int(site_id) if str(site_id).isdigit() else site_id
+        addresses = sending_ips_for(self.config, device)
+        if addresses:
+            body['sending_ips'] = addresses
+
+        path = self.kentik.device_update.format(device_id=device_id)
+        url = f'{self.kentik.grpc_base_url}{path}'
+        payload = self._request('PUT', url, {'device': body})
+        updated = None
+        if isinstance(payload, dict):
+            updated = payload.get('device', payload)
+            logger.info('Updated Kentik device %s (id %s)',
+                        body.get('device_name', device.name), device_id)
+        return updated
+
+    def list_plans(self) -> list:
+        '''
+        Retrieve the licence plans available to this account
+
+        Returns:
+            list: raw plan dicts, empty list on failure
+        '''
+        url = f'{self.kentik.base_url}{self.kentik.plan_list}'
+        payload = self._request('GET', url)
+        plans = []
+        if isinstance(payload, dict):
+            plans = payload.get('plans') or []
+        elif isinstance(payload, list):
+            plans = payload
+        logger.info('Retrieved %d Kentik plan(s)', len(plans))
+        return plans
+
+    @staticmethod
+    def plan_capacity(plan: dict) -> dict:
+        '''
+        Device capacity of a plan
+
+        Parameters:
+            plan (dict): raw plan dict
+
+        Returns:
+            dict: id, name, max_devices, used and remaining
+        '''
+        max_devices = plan.get('max_devices')
+        used = len(plan.get('devices') or [])
+        remaining = None
+        if isinstance(max_devices, int):
+            remaining = max(max_devices - used, 0)
+        return {'id': plan.get('id'), 'name': plan.get('name', ''),
+                'max_devices': max_devices, 'used': used,
+                'remaining': remaining, 'active': plan.get('active', True)}
+
+    def resolve_plan(self, name: str = '', plan_id: int = 0,
+                     plans: list = None) -> tuple:
+        '''
+        Find the plan to create flow devices under
+
+        Resolution order: an explicit id, then the configured name matched
+        case-insensitively with underscores and spaces treated as equivalent
+        (so Free_Flow, 'free flow' and 'Free Flow' all hit), then any active
+        plan whose name mentions 'free', then the first active plan. Anything
+        other than an exact hit is reported - the plan decides what the devices
+        cost, so a silent substitution is not acceptable.
+
+        An id that the API does not list is still honoured: licensing is not
+        visible to every service account, and the operator may know the id even
+        when this tool cannot enumerate it.
+
+        Parameters:
+            name (str): plan name to look for
+            plan_id (int): explicit plan id, overrides the name
+            plans (list): raw plan dicts, fetched when not supplied
+
+        Returns:
+            tuple: (capacity dict or None, warning message)
+        '''
+        if plans is None:
+            plans = self.list_plans()
+
+        def key(value):
+            return str(value or '').replace('_', ' ').strip().casefold()
+
+        chosen = None
+        warning = ''
+
+        if plan_id:
+            chosen = next((p for p in plans if str(p.get('id')) == str(plan_id)), None)
+            if chosen is None:
+                logger.info('Plan id %s is not listed by the API, using it as given',
+                            plan_id)
+                return ({'id': plan_id, 'name': f'id {plan_id} (entered)',
+                         'max_devices': None, 'used': 0, 'remaining': None,
+                         'active': True},
+                        'Plan id was entered manually and could not be confirmed '
+                        'against the API, so remaining capacity is unknown')
+        elif name:
+            chosen = next((p for p in plans if key(p.get('name')) == key(name)), None)
+            if chosen is None:
+                active = [p for p in plans if p.get('active', True)]
+                free = [p for p in active if 'free' in key(p.get('name'))]
+                if free:
+                    chosen = free[0]
+                    warning = (f'No plan named {name!r}, using the free plan '
+                               f'{chosen.get("name")!r} (id {chosen.get("id")})')
+                elif active:
+                    chosen = active[0]
+                    warning = (f'No plan named {name!r} and no free plan, falling '
+                               f'back to {chosen.get("name")!r} (id '
+                               f'{chosen.get("id")})')
+                else:
+                    warning = (f'No plan named {name!r} and no active plan to fall '
+                               f'back to')
+
+        capacity = self.plan_capacity(chosen) if chosen else None
+        if warning:
+            logger.warning('%s', warning)
+        return capacity, warning
+
+    def list_agents(self) -> list:
+        '''
+        Retrieve the NMS agents available to this account
+
+        Returns:
+            list: raw agent dicts, empty list on failure
+        '''
+        url = f'{self.kentik.grpc_base_url}{self.kentik.agent_list}'
+        payload = self._request('GET', url)
+        agents = []
+        if isinstance(payload, dict):
+            agents = payload.get('agents') or payload.get('items') or []
+        logger.info('Retrieved %d Kentik agent(s)', len(agents))
+        return agents
+
+    def list_credentials(self) -> list:
+        '''
+        Retrieve the SNMP credential groups available to this account
+
+        Returns:
+            list: raw credential dicts, empty list on failure
+        '''
+        url = f'{self.kentik.grpc_base_url}{self.kentik.credential_list}'
+        payload = self._request('GET', url)
+        credentials = []
+        if isinstance(payload, dict):
+            credentials = (payload.get('credentials') or payload.get('groups')
+                           or payload.get('items') or [])
+        logger.info('Retrieved %d Kentik credential group(s)', len(credentials))
+        return credentials
+
+    def device_payload(self, device: Device, site_id: str = '') -> dict:
+        '''
+        Build the device API request body for this device
 
         Parameters:
             device (Device): device candidate
-            site_id (str): Kentik site id
+            site_id (str): Kentik site id the device belongs to
 
         Returns:
-            dict: never returns, always raises
+            dict: request body for the device create
         '''
-        logger.error('Refusing to create device %s: %s', device.name, DEVICE_WRITE_REFUSED)
-        raise NotImplementedError(DEVICE_WRITE_REFUSED)
+        return build_device_payload(self.config, device, site_id)

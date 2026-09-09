@@ -17,7 +17,7 @@ def make_config(**overrides):
     defaults = dict(source='uddi', site_key='Site', class_key='kentik_class',
                     site_type_key='site_type', max_prefix_len=None,
                     site_filter=None, include_address_blocks=False,
-                    replace_networks=False, devices=False, use_insight=False,
+                    devices=False, use_insight=False,
                     use_uai=False, use_gateways=False, network_view=None,
                     ip_space=None, gm=None)
     defaults.update(overrides)

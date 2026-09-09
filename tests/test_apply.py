@@ -75,7 +75,7 @@ def test_apply_records_state_and_the_device_note(tmp_path):
     results = apply_plan(config, plan, RecordingKentik())
     state = load_state(str(state_file))
 
-    assert results['notes'] and 'not enabled' in results['notes'][0]
+    assert results['notes'] and 'Switch the task to devices' in results['notes'][0]
     assert state['sites']['NEW-SITE']['id'] == '101'
     assert state['runs'][-1]['created'] == 1
 

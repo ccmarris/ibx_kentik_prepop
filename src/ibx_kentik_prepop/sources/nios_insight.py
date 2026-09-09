@@ -49,7 +49,7 @@ __license__ = 'BSD'
 
 import logging
 from ibx_kentik_prepop.model import Device
-from ibx_kentik_prepop.sources.base import role_from_text, site_for_ip
+from ibx_kentik_prepop.sources.base import match_site, role_from_text
 from ibx_kentik_prepop.sources.nios import NIOS
 
 logger = logging.getLogger(__name__)
@@ -62,7 +62,8 @@ DEVICE_OBJTYPE = 'discovery:device'
 DEVICE_FIELDS = ('name,address,model,os_version,vendor,type,network_view,'
                  'description,location,interface_count')
 INTERFACE_OBJTYPE = 'discovery:deviceinterface'
-INTERFACE_FIELDS = 'device,name,ip_address,network_view,type'
+INTERFACE_FIELDS = ('device,name,ip_address,network_view,type,description,'
+                    'speed,admin_status,oper_status')
 
 
 class NetworkInsight(NIOS):
@@ -74,11 +75,7 @@ class NetworkInsight(NIOS):
 
     def get_devices(self, subnets: list = None) -> list:
         '''
-        Retrieve discovered devices and attribute them to sites
-
-        The site comes from the device's own location attribute when present,
-        otherwise from the most specific subnet containing its management
-        address.
+        Retrieve discovered devices with their interfaces, placed on sites
 
         Parameters:
             subnets (list): normalised subnet records, for site attribution
@@ -88,38 +85,56 @@ class NetworkInsight(NIOS):
         '''
         devices = []
         raw = self.get_all(DEVICE_OBJTYPE, DEVICE_FIELDS)
+        interfaces = self.interfaces_by_device()
 
         for obj in raw:
             address = str(obj.get('address', ''))
             role = role_from_text(obj.get('type'), obj.get('model'),
                                   obj.get('description'))
-            site = str(obj.get('location', '') or '')
-            if not site:
-                site = site_for_ip(address, subnets or [])
-            devices.append(Device(
+            device = Device(
                 name=str(obj.get('name', '') or address),
                 mgmt_ip=address,
                 role=role,
                 vendor=str(obj.get('vendor', '')),
                 model=str(obj.get('model', '')),
                 os_version=str(obj.get('os_version', '')),
-                site_name=site,
-                sending_ips=(address,) if address else (),
+                interfaces=interfaces.get(str(obj.get('_ref', '')), []),
                 origin='network_insight',
                 raw=obj,
-            ))
+            )
+            device.site_name, device.site_match = match_site(
+                device, subnets or [], str(obj.get('location', '') or ''))
+            devices.append(device)
 
-        logger.info('Retrieved %d Network Insight device(s)', len(devices))
+        logger.info('Retrieved %d Network Insight device(s) with %d interface(s)',
+                    len(devices), sum(len(v) for v in interfaces.values()))
         return devices
 
-    def get_interfaces(self) -> list:
+    def interfaces_by_device(self) -> dict:
         '''
-        Retrieve discovered device interfaces
+        Retrieve discovered interfaces, grouped by their parent device
 
         Parameters:
             None
 
         Returns:
-            list: raw discovery:deviceinterface objects
+            dict: device _ref -> list of normalised interface dicts
         '''
-        return self.get_all(INTERFACE_OBJTYPE, INTERFACE_FIELDS)
+        grouped = {}
+        for obj in self.get_all(INTERFACE_OBJTYPE, INTERFACE_FIELDS):
+            parent = obj.get('device')
+            if isinstance(parent, dict):
+                parent = parent.get('_ref', '')
+            address = obj.get('ip_address', '')
+            if isinstance(address, list):
+                address = address[0] if address else ''
+            grouped.setdefault(str(parent or ''), []).append({
+                'name': str(obj.get('name', '')),
+                'address': str(address or ''),
+                'description': str(obj.get('description', '')),
+                'speed': str(obj.get('speed', '')),
+                'type': str(obj.get('type', '')),
+            })
+        return grouped
+
+

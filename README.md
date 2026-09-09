@@ -13,9 +13,23 @@ Network Insight or Universal Asset Insights.
 This tool reads that, derives a clean set of sites with **summarised** subnet
 lists, shows you exactly what it would do, and then pushes it.
 
-- Sites are created and updated. **Sites are never deleted.**
+Two tasks, selected with `--task` (or the switch at the top of the web UI):
+
+- **Sites data** — derive sites, their summarised subnets, and their postal
+  address and coordinates where the metadata exists.
+- **Device data** — derive routers, switches and firewalls from Network Insight
+  or UAI, place them on those sites, and create them in Kentik for flow or NMS.
+
+Ground rules throughout:
+
 - Dry run is the default. Nothing is written without `--go`.
-- Devices are **reported only** in this version (see [Devices](#devices)).
+- Sites and devices are only ever created or updated. **Nothing is deleted.**
+- Kentik **merges** site subnet lists on a PUT and offers no field mask or
+  PATCH, so nothing this tool submits can remove a prefix from a site. Prefixes
+  Kentik holds that your Infoblox data does not account for are reported as
+  extras, to remove in the portal if you want them gone.
+- Creating a device consumes a licensed device slot, so the device apply checks
+  the plan's remaining capacity and stops rather than overrunning it.
 
 ## Install
 
@@ -83,6 +97,21 @@ Apply it:
 
 ```bash
 ./ibx_kentik_prepop.py -c ibx_kentik.ini --source uddi --site-key Site --go
+```
+
+Then the devices, once those sites exist:
+
+```bash
+# dry run: what would be created, on which sites, with which sending IPs
+./ibx_kentik_prepop.py -c ibx_kentik.ini --task devices --site-key Site --use-uai
+
+# create them for flow on the Free_Flow plan, skipping one
+./ibx_kentik_prepop.py -c ibx_kentik.ini --task devices --site-key Site --use-uai \
+    --exclude-device nyc-fw-01 --go
+
+# create them as NMS devices instead
+./ibx_kentik_prepop.py -c ibx_kentik.ini --task devices --site-key Site --use-insight \
+    --device-mode nms --agent-id <agent> --credential-name snmp-ro --go
 ```
 
 Other useful runs:
@@ -179,8 +208,10 @@ it with Kentik's own tooling instead of letting this tool write:
 | `PREFIX-devices-add.csv` | The columns Kentik's own [`kentik_add_device.py`](https://github.com/kentik/kentik_add_device) loader reads: `siteid,devicename,devicedescription,sendingips,v6add,asn,devicesnmpcommunity,devicesamplerate,planid`. |
 | `PREFIX-devices-nms.csv` | The columns the portal's NMS bulk device import accepts: `name,address,agent_id`. `agent_id` is left empty — the portal then uses the first available agent. |
 
-Only artefacts with something in them are written; device files appear only when
-the run included `--devices`. Sites needing no change are excluded unless you
+Only artefacts with something in them are written. The device CSVs follow the
+mode — `devices-add.csv` in flow mode, `devices-nms.csv` in NMS mode — and
+excluded devices are omitted from all of them. On a `--task devices` run only the
+device artefacts are produced. Sites needing no change are excluded unless you
 pass `--export-include-unchanged`.
 
 Two things to know:
@@ -190,7 +221,8 @@ Two things to know:
   be applied. The CSV is for humans.
 - **Create the sites before the devices.** A device carries `site_id`, and that
   is only filled in for sites that already exist in Kentik — so either apply the
-  sites with `--go` first, or export again once they exist.
+  sites with `--go` first, or export again once they exist. The report warns
+  which sites are still missing.
 
 Replaying the site JSON is a one-liner:
 
@@ -212,18 +244,57 @@ EOF
 Device candidates come from Network Insight (`--use-insight`, NIOS only),
 Universal Asset Insights (`--use-uai`, UDDI only), or — when neither is
 available — inference from the DHCP `routers` option (`--use-gateways`), which
-is flagged as inferred rather than discovered in the report.
+is flagged as inferred rather than discovered.
 
-They are **reported only**. The report includes the exact `POST /api/v5/device`
-payload for each candidate. Three reasons the write is not wired up:
+**Interfaces and sending IPs.** Network Insight interfaces
+(`discovery:deviceinterface`) and UAI asset addresses become the device's
+interface list. `sending_ips` defaults to the management address
+(`--sending-ips mgmt`), can be every discovered address (`--sending-ips all`),
+and can be chosen per device from the interface list in the UI. This matters:
+for a flow device the sending IP must be the **flow exporter source address**, or
+the device sits idle.
 
-1. Every Kentik device consumes a **licensed device slot**.
-2. `plan_id` has to be chosen by the operator.
-3. `sending_ips` must be the **flow exporter source address**, which is not
-   necessarily the discovered management IP. Get it wrong and you create a
-   device that never matches any flow.
+**Site matching.** A device is placed by, in order: its own location attribute
+when that names a site we derived, then the most specific subnet containing any
+of its **interface** addresses, then its management address. The report's
+`matched by` column says which rule won — a device placed by a /8 is a much
+weaker claim than one placed by the /30 on its uplink.
 
-Review the payloads, then create the devices in Kentik.
+**Flow or NMS** (`--device-mode`, default `flow`). Both go to the same endpoint
+(`POST /device/v202504beta2/device`); the mode decides which fields are
+populated:
+
+| Mode | Fields |
+|---|---|
+| `flow` | `device_subtype`, `plan_id`, `sending_ips`, `device_sample_rate`, `minimize_snmp`, `device_snmp_ip` |
+| `nms` | `nms{agent_id, ip_address, snmp{credential_name, port}}`, `monitoring_template_id` |
+
+NMS **requires an agent** (`--agent-id`, or the dropdown in the UI, populated
+from `GET /kagent/v202401/agents`): a device created without one never polls, so
+the apply refuses. SNMP credentials come from
+`GET /credential/v202407alpha1/group`.
+
+**The licence plan.** Plans are read from `GET /api/v5/plans` and resolved by
+name — `Free_Flow` by default, matched case-insensitively with underscores and
+spaces treated as equivalent. If that name is absent, any active plan mentioning
+"free" is preferred, then the first active plan, and the substitution is
+reported rather than made quietly. Licensing is not visible to every service
+account: when the API returns nothing, supply the id yourself with `--plan-id`
+(or the **Plan id** field in the UI) and it is used as given. Before writing,
+devices-to-create is checked against `max_devices` minus the devices already on
+the plan; the run stops unless `--allow-over-capacity` is set.
+
+**Devices that already exist** (matched on the Kentik device name) are reported
+as `exists` with their id, along with any difference between the derived site and
+sending IPs and what Kentik holds. They are **not** touched unless you pass
+`--update-devices`, which updates only those two fields, read-modify-write: the
+device is fetched, the two fields replaced, and the whole object PUT back, so
+monitoring configuration this tool knows nothing about survives.
+
+**Excluding devices.** `--exclude-device NAME` (repeatable, matching the
+discovered name, the Kentik name or the management IP), `--exclude-file FILE`,
+or the tick box per row in the UI. Excluded devices are skipped by both the
+apply and the export, and shown struck through in the report.
 
 ## Web interface
 
@@ -241,6 +312,15 @@ file.
 `GET /sites` and reports what came back, so you can prove the credentials and
 auth headers work before attempting a write. When Apply is disabled the hint
 under the buttons says exactly why.
+
+### The task switch
+
+**Sites data** and **Device data** at the top of the form select the task. The
+site fields hide on a device run and vice versa, the results panels swap, and
+the Apply button relabels — the two jobs never share a screen. Changing a device
+tick box, a sending-IP selection, the mode or the plan invalidates the reviewed
+plan and asks for a fresh dry run, so an apply can never carry a selection you
+did not review.
 
 ### Applying from the UI
 
@@ -283,7 +363,12 @@ body.
 
 ## Verify before running against a customer tenant
 
-Three things are worth confirming per tenant, all flagged inline in the code:
+Confirmed with Kentik: a site **PUT merges** subnet information rather than
+replacing it, and there is no field mask or PATCH on the Site API — which is why
+this tool never claims to remove a prefix.
+
+Three things are still worth confirming per tenant, all flagged inline in the
+code:
 
 1. **Kentik auth header names** (`X-CH-Auth-Email` / `X-CH-Auth-API-Token`) —
    everything depends on them. A read-only
@@ -294,7 +379,11 @@ Three things are worth confirming per tenant, all flagged inline in the code:
 3. **The UAI asset category** covering routers, switches and firewalls.
    `compute` is confirmed for virtual machines; the network infrastructure
    category needs confirming against the tenant (`uddi.asset_category` in the
-   YAML).
+   YAML, default `network`).
+4. **Whether a device PUT merges or replaces**, which decides how safe
+   `--update-devices` is. The read-modify-write approach assumes replace, which
+   is the conservative choice either way. NMS `plan_id` requirements are also
+   unconfirmed — it is only sent when set.
 
 ## Tests
 

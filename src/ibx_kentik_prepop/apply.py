@@ -51,8 +51,9 @@ import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
-from ibx_kentik_prepop.model import ACTION_CREATE, ACTION_NO_CHANGE, ACTION_UPDATE
-from ibx_kentik_prepop.targets.kentik import DEVICE_WRITE_REFUSED
+from ibx_kentik_prepop.model import (ACTION_CREATE, ACTION_EXISTS,
+                                     ACTION_NO_CHANGE, ACTION_UPDATE)
+from ibx_kentik_prepop.summarise import sanitise_device_name
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +103,123 @@ def save_state(path: str, state: dict) -> bool:
     except OSError as exc:
         logger.error('Could not write state file %s: %s', path, exc)
     return written
+
+
+def apply_device_plan(config, plan, kentik, on_event=None) -> dict:
+    '''
+    Create (and optionally re-place) Kentik devices according to the plan
+
+    Excluded devices are skipped. Existing devices are left alone unless the
+    plan marked them for update, which only ever touches site_id and
+    sending_ips. Devices are never deleted.
+
+    Parameters:
+        config (ProjectConfig): assembled configuration
+        plan (Plan): the device plan to apply
+        kentik (KENTIK): initialised Kentik target
+        on_event (callable): optional callback taking one event dict
+
+    Returns:
+        dict: results with created, updated, existing, excluded, failed, errors
+    '''
+    results = {'created': [], 'updated': [], 'existing': [], 'excluded': [],
+               'failed': [], 'notes': [], 'errors': {}}
+    state = load_state(config.state_file)
+    state.setdefault('devices', {})
+    now = datetime.now(timezone.utc).isoformat(timespec='seconds')
+
+    def emit(event: dict) -> None:
+        '''
+        Hand an event to the caller's callback, if it supplied one
+        '''
+        if on_event is not None:
+            on_event(event)
+        return
+
+    to_change = sum(1 for e in plan.included_devices()
+                    if e.action in (ACTION_CREATE, ACTION_UPDATE))
+    emit({'type': 'start', 'devices': len(plan.device_entries),
+          'to_change': to_change, 'mode': plan.device_mode,
+          'plan_id': plan.plan_id, 'stats': plan.stats()})
+
+    for entry in plan.device_entries:
+        device = entry.device
+        name = device.name
+
+        if entry.excluded:
+            results['excluded'].append(name)
+            emit({'type': 'device', 'device': name, 'action': entry.action,
+                  'status': 'excluded', 'detail': entry.exclude_reason})
+            continue
+
+        if entry.action == ACTION_EXISTS:
+            results['existing'].append(name)
+            emit({'type': 'device', 'device': name, 'action': entry.action,
+                  'status': 'exists', 'kentik_id': entry.kentik_id,
+                  'mismatch': entry.mismatch})
+            continue
+
+        if entry.action == ACTION_UPDATE:
+            raw_device = kentik.get_device(entry.kentik_id)
+            updated = None
+            if raw_device is not None:
+                updated = kentik.update_device_placement(raw_device, device,
+                                                         entry.site_id)
+            if updated is None:
+                error = kentik.error_text() or 'could not read the existing device'
+                results['failed'].append(name)
+                results['errors'][name] = error
+                emit({'type': 'device', 'device': name, 'action': entry.action,
+                      'status': 'failed', 'error': error})
+            else:
+                results['updated'].append(name)
+                emit({'type': 'device', 'device': name, 'action': entry.action,
+                      'status': 'updated', 'kentik_id': entry.kentik_id,
+                      'mismatch': entry.mismatch})
+            continue
+
+        created = kentik.create_device(device, entry.site_id)
+        if created is None:
+            error = kentik.error_text()
+            results['failed'].append(name)
+            results['errors'][name] = error
+            emit({'type': 'device', 'device': name, 'action': entry.action,
+                  'status': 'failed', 'error': error})
+        else:
+            device_id = str(created.get('id', ''))
+            results['created'].append(name)
+            state['devices'][sanitise_device_name(name)] = {
+                'id': device_id, 'mode': plan.device_mode,
+                'site_id': entry.site_id, 'plan_id': plan.plan_id,
+                'sending_ips': list(device.sending_ips or ()),
+                'applied': now, 'source': plan.source, 'origin': device.origin}
+            emit({'type': 'device', 'device': name, 'action': entry.action,
+                  'status': 'created', 'kentik_id': device_id,
+                  'detail': f'site {entry.site_id}' if entry.site_id else 'no site'})
+
+    state['runs'].append({
+        'applied': now, 'task': 'devices', 'source': plan.source,
+        'mode': plan.device_mode, 'plan_id': plan.plan_id,
+        'created': len(results['created']), 'updated': len(results['updated']),
+        'existing': len(results['existing']), 'excluded': len(results['excluded']),
+        'failed': len(results['failed']),
+    })
+    state['runs'] = state['runs'][-50:]
+    save_state(config.state_file, state)
+
+    logger.info('Device apply complete: %d created, %d updated, %d existing, '
+                '%d excluded, %d failed',
+                len(results['created']), len(results['updated']),
+                len(results['existing']), len(results['excluded']),
+                len(results['failed']))
+    emit({'type': 'done',
+          'created': len(results['created']),
+          'updated': len(results['updated']),
+          'existing': len(results['existing']),
+          'excluded': len(results['excluded']),
+          'failed': len(results['failed']),
+          'errors': results['errors']})
+    return results
 
 
 def apply_plan(config, plan, kentik, on_event=None) -> dict:
@@ -186,14 +304,14 @@ def apply_plan(config, plan, kentik, on_event=None) -> dict:
                 state['sites'][name] = record
                 emit({'type': 'site', 'site': name, 'action': entry.action,
                       'status': 'updated', 'kentik_id': entry.kentik_id,
-                      'added': entry.added, 'removed': entry.removed})
+                      'added': entry.added, 'extra': entry.extra})
 
     if plan.devices:
-        results['notes'].append(DEVICE_WRITE_REFUSED)
-        logger.warning('%d device candidate(s) reported but not created. %s',
-                       len(plan.devices), DEVICE_WRITE_REFUSED)
-        emit({'type': 'note', 'message': DEVICE_WRITE_REFUSED,
-              'devices': len(plan.devices)})
+        note = (f'{len(plan.devices)} device candidate(s) were reported but not '
+                f'touched by this site run. Switch the task to devices to '
+                f'create them.')
+        results['notes'].append(note)
+        emit({'type': 'note', 'message': note, 'devices': len(plan.devices)})
 
     state['runs'].append({
         'applied': now,

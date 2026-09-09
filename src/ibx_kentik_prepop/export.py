@@ -53,7 +53,7 @@ import json
 import logging
 from pathlib import Path
 from ibx_kentik_prepop.model import (ACTION_NO_CHANGE, CLASSIFICATIONS,
-                                     CLASS_TO_KENTIK)
+                                     CLASS_TO_KENTIK, MODE_NMS, TASK_DEVICES)
 from ibx_kentik_prepop.targets.kentik import KENTIK, build_device_payload
 
 logger = logging.getLogger(__name__)
@@ -64,7 +64,6 @@ logger = logging.getLogger(__name__)
 # artefact that can actually be imported, and the CSV is for review/exchange.
 SITE_PATH_CREATE = '/site/v202211/sites'
 SITE_PATH_UPDATE = '/site/v202211/sites/{site_id}'
-DEVICE_PATH_CREATE = '/api/v5/device'
 
 SITE_CSV_HEADERS = ('title', 'type', 'action', 'kentik_id',
                     'infrastructure_networks', 'user_access_networks',
@@ -82,7 +81,8 @@ FORMATS = ('sites-json', 'sites-csv', 'devices-json', 'devices-add-csv',
            'devices-nms-csv')
 
 FORMAT_NOTES = {
-    'sites-json': 'Site API v202211 request bodies, ready to POST/PUT',
+    'sites-json': ('Site API v202211 request bodies, ready to POST/PUT. Kentik '
+                   'merges subnet lists, so a PUT only ever adds prefixes'),
     'sites-csv': 'flat site table for review - Kentik does not import site CSV',
     'devices-json': 'v5 admin API device request bodies, ready to POST',
     'devices-add-csv': "columns for Kentik's kentik_add_device.py loader",
@@ -123,9 +123,34 @@ def site_requests(plan, include_unchanged: bool = False) -> list:
     return requests
 
 
+def device_targets(plan) -> list:
+    '''
+    The devices an export should cover, with the site id each one carries
+
+    Device plan entries win when present, because they hold the exclusions and
+    the resolved site ids; a site run falls back to the bare candidate list.
+
+    Parameters:
+        plan (Plan): the plan to export
+
+    Returns:
+        list: (Device, site_id) tuples, excluded devices omitted
+    '''
+    if plan.device_entries:
+        targets = [(e.device, e.site_id) for e in plan.device_entries
+                   if not e.excluded]
+    else:
+        site_ids = {}
+        for entry in plan.entries:
+            if entry.kentik_id:
+                site_ids[entry.site.name] = entry.kentik_id
+        targets = [(d, site_ids.get(d.site_name, '')) for d in plan.devices]
+    return targets
+
+
 def device_requests(plan, config) -> list:
     '''
-    Build the Kentik device API requests for the reported device candidates
+    Build the Kentik device API requests for the exportable devices
 
     Parameters:
         plan (Plan): the plan to export
@@ -134,17 +159,10 @@ def device_requests(plan, config) -> list:
     Returns:
         list: dicts with method, path and body keys
     '''
-    site_ids = {}
-    for entry in plan.entries:
-        if entry.kentik_id:
-            site_ids[entry.site.name] = entry.kentik_id
-
     requests = []
-    for device in plan.devices:
-        body = build_device_payload(config, device,
-                                    site_ids.get(device.site_name, ''))
-        requests.append({'method': 'POST', 'path': DEVICE_PATH_CREATE,
-                         'body': body})
+    for device, site_id in device_targets(plan):
+        requests.append({'method': 'POST', 'path': config.kentik.device_create,
+                         'body': build_device_payload(config, device, site_id)})
 
     logger.debug('Built %d device request(s)', len(requests))
     return requests
@@ -209,7 +227,7 @@ def add_device_csv_rows(plan, config) -> list:
     return rows
 
 
-def nms_device_csv_rows(plan) -> list:
+def nms_device_csv_rows(plan, agent_id: str = '') -> list:
     '''
     Build rows for the portal's NMS bulk device import
 
@@ -224,10 +242,10 @@ def nms_device_csv_rows(plan) -> list:
     '''
     from ibx_kentik_prepop.summarise import sanitise_device_name
     rows = []
-    for device in plan.devices:
+    for device, _ in device_targets(plan):
         rows.append({'name': sanitise_device_name(device.name),
                      'address': device.mgmt_ip,
-                     'agent_id': ''})
+                     'agent_id': agent_id})
     return rows
 
 
@@ -265,11 +283,22 @@ def applicable_formats(plan, include_unchanged: bool = False) -> list:
     Returns:
         list: format names from FORMATS, in order
     '''
-    has_sites = bool(site_requests(plan, include_unchanged))
-    has_devices = bool(plan.devices)
+    has_devices = bool(device_targets(plan))
+    has_sites = (plan.task != TASK_DEVICES
+                 and bool(site_requests(plan, include_unchanged)))
+
     formats = []
     for export_format in FORMATS:
-        wanted = has_devices if export_format.startswith('devices') else has_sites
+        if export_format.startswith('devices'):
+            wanted = has_devices
+            # The two device CSVs target different importers, so only offer the
+            # one that matches the mode being exported.
+            if export_format == 'devices-nms-csv':
+                wanted = wanted and plan.device_mode == MODE_NMS
+            elif export_format == 'devices-add-csv':
+                wanted = wanted and plan.device_mode != MODE_NMS
+        else:
+            wanted = has_sites
         if wanted:
             formats.append(export_format)
     return formats
@@ -297,7 +326,8 @@ def render(plan, config, export_format: str, include_unchanged: bool = False) ->
     elif export_format == 'devices-add-csv':
         text = _csv_text(ADD_DEVICE_CSV_HEADERS, add_device_csv_rows(plan, config))
     elif export_format == 'devices-nms-csv':
-        text = _csv_text(NMS_CSV_HEADERS, nms_device_csv_rows(plan))
+        text = _csv_text(NMS_CSV_HEADERS,
+                         nms_device_csv_rows(plan, config.device.agent_id))
     else:
         raise ValueError(f'Unknown export format {export_format!r}, '
                          f"expected one of {', '.join(FORMATS)}")

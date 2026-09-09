@@ -257,7 +257,10 @@ class NIOS(SiteSource):
                     mgmt_ip=gateway,
                     role=ROLE_ROUTER,
                     site_name=record.get('site', '') or site_for_ip(gateway, subnets or []),
-                    sending_ips=(gateway,),
+                    site_match='subnet',
+                    interfaces=[{'name': 'gateway', 'address': gateway,
+                                 'description': record.get('cidr', ''),
+                                 'speed': '', 'type': ''}],
                     origin='default_gateway',
                     raw={'network': record.get('cidr', '')},
                 )

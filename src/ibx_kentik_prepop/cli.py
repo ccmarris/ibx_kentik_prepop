@@ -51,11 +51,13 @@ import argparse
 import logging
 import sys
 from ibx_kentik_prepop import export, report
-from ibx_kentik_prepop.apply import apply_plan
+from ibx_kentik_prepop.apply import apply_device_plan, apply_plan
 from ibx_kentik_prepop.config import (DEFAULT_INI_FILE, build_config,
                                       validate_kentik_credentials,
                                       validate_source_credentials)
-from ibx_kentik_prepop.plan import build_plan, get_source
+from ibx_kentik_prepop.model import TASK_DEVICES
+from ibx_kentik_prepop.plan import (build_device_plan, build_plan,
+                                    device_apply_problems, get_source)
 from ibx_kentik_prepop.targets.kentik import KENTIK
 
 logger = logging.getLogger(__name__)
@@ -76,6 +78,9 @@ def parseargs():
     parser = argparse.ArgumentParser(
         description='Pre-populate Kentik sites and report device candidates '
                     'from Infoblox NIOS or Universal DDI data')
+    parser.add_argument('--task', choices=['sites', 'devices'], default='sites',
+                        help='what to import (default: sites). Sites must exist '
+                             'before devices can be attached to them')
     parser.add_argument('--source', choices=['nios', 'uddi'], default='uddi',
                         help='Infoblox platform to read from (default: uddi)')
     parser.add_argument('--site-key', help='EA (NIOS) or tag (UDDI) key holding '
@@ -93,17 +98,42 @@ def parseargs():
                         help='also read address blocks / network containers')
     parser.add_argument('--max-prefix-len', type=int,
                         help='aggregate summarised prefixes up to this length')
-    parser.add_argument('--replace-networks', action='store_true',
-                        help='treat the derived prefixes as authoritative '
-                             '(default: add to what Kentik already holds)')
     parser.add_argument('--devices', action='store_true',
-                        help='include the device candidate section')
+                        help='include the device candidate section on a site run')
     parser.add_argument('--use-insight', action='store_true',
                         help='use NIOS Network Insight discovered devices')
     parser.add_argument('--use-uai', action='store_true',
                         help='use Universal Asset Insights discovered assets')
     parser.add_argument('--use-gateways', action='store_true',
                         help='infer routers from the DHCP routers option')
+    parser.add_argument('--device-mode', choices=['flow', 'nms'], default=None,
+                        help='create devices for flow (default) or for NMS')
+    parser.add_argument('--sending-ips', choices=['mgmt', 'all'], default=None,
+                        help='flow exporter source addresses: the management IP '
+                             '(default) or every discovered interface address')
+    parser.add_argument('--plan-name', default=None,
+                        help='Kentik plan to create flow devices under '
+                             '(default: Free_Flow)')
+    parser.add_argument('--plan-id', type=int, default=None,
+                        help='Kentik plan id, overriding --plan-name')
+    parser.add_argument('--agent-id', default=None,
+                        help='Kentik agent id for NMS devices (required for NMS)')
+    parser.add_argument('--credential-name', default=None,
+                        help='SNMP credential name for NMS devices')
+    parser.add_argument('--monitoring-template-id', type=int, default=None,
+                        help='NMS monitoring template id')
+    parser.add_argument('--exclude-device', action='append', default=None,
+                        metavar='NAME',
+                        help='exclude a device by name or management IP '
+                             '(repeatable)')
+    parser.add_argument('--exclude-file', default=None,
+                        help='file of device names/IPs to exclude, one per line')
+    parser.add_argument('--update-devices', action='store_true',
+                        help='update the site and sending IPs of devices that '
+                             'already exist in Kentik')
+    parser.add_argument('--allow-over-capacity', action='store_true',
+                        help='proceed even when the plan has too few device '
+                             'slots left')
     parser.add_argument('-o', '--output', choices=['table', 'csv', 'json'],
                         default='table', help='report format (default: table)')
     parser.add_argument('--outfile', help='write the report to this file')
@@ -229,7 +259,11 @@ def main() -> int:
     else:
         kentik = KENTIK(config)
 
-    plan = build_plan(config, kentik)
+    if config.task == TASK_DEVICES:
+        plan, config = build_device_plan(config, kentik)
+    else:
+        plan = build_plan(config, kentik)
+
     text = report.render(plan, args.output, args.outfile or '', dry_run=not args.go)
     emit(text, args.output, args.outfile or '')
 
@@ -243,7 +277,23 @@ def main() -> int:
         else:
             print('\nNothing to export - no sites need creating or updating.')
 
-    if args.go:
+    if args.go and config.task == TASK_DEVICES:
+        problems = device_apply_problems(config, plan)
+        if problems:
+            for problem in problems:
+                print(f'ERROR: {problem}', file=sys.stderr)
+            return EXIT_CONFIG
+
+        results = apply_device_plan(config, plan, kentik)
+        print(f"\nApplied: {len(results['created'])} created, "
+              f"{len(results['updated'])} updated, "
+              f"{len(results['existing'])} already existed, "
+              f"{len(results['excluded'])} excluded, "
+              f"{len(results['failed'])} failed")
+        if results['failed']:
+            print('Failed devices: ' + ', '.join(results['failed']), file=sys.stderr)
+            exitcode = EXIT_FAILED
+    elif args.go:
         results = apply_plan(config, plan, kentik)
         print(f"\nApplied: {len(results['created'])} created, "
               f"{len(results['updated'])} updated, "

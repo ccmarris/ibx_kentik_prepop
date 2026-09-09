@@ -29,7 +29,7 @@ def test_render_table_includes_all_sections():
     assert 'DRY RUN' in text
     assert '== Sites ==' in text
     assert '== Subnets ==' in text
-    assert '== Devices (report only) ==' in text
+    assert '== Devices' in text
     assert '== Warnings ==' in text
     assert 'LON-DC1' in text
     assert '10.1.0.0/24' in text
@@ -48,6 +48,25 @@ def test_render_json_round_trips():
     assert data['sites'][0]['subnets'][0]['cidr'] == '10.1.0.0/24'
     assert data['devices'][0]['name'] == 'lon-rtr-01'
     assert data['warnings'][0]['category'] == 'unattributed_subnets'
+
+
+def test_render_table_for_the_device_task():
+    from ibx_kentik_prepop.model import DevicePlan, TASK_DEVICES
+    plan = sample_plan()
+    plan.task = TASK_DEVICES
+    plan.device_mode = 'flow'
+    plan.plan_name = 'Free_Flow'
+    plan.plan_id = 7
+    plan.capacity = {'remaining': 3, 'max_devices': 5}
+    plan.device_entries = [
+        DevicePlan(device=plan.devices[0], action='create', site_id='42'),
+    ]
+    text = report.render(plan, 'table')
+
+    assert 'plan - devices' in text
+    assert 'Free_Flow (id 7) (3 of 5 slot(s) left)' in text
+    assert '== Sites ==' not in text
+    assert '== Devices ==' in text
 
 
 def test_render_csv_to_stdout_has_a_section_per_block():

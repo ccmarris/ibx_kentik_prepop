@@ -114,11 +114,22 @@ pre.log {
 .diff ul { list-style: none; margin: 4px 0 0; padding: 0; }
 .diff li { font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
 .diff li.add::before { content: '+ '; color: var(--ibx-green); font-weight: 700; }
-.diff li.remove::before { content: '\2212  '; color: var(--ibx-text-muted); font-weight: 700; }
+.diff li.extra::before { content: '~ '; color: var(--ibx-text-muted); font-weight: 700; }
 .chip { font-weight: 700; font-size: 11px; text-transform: uppercase; letter-spacing: 0.6px; }
 .chip.created, .chip.updated { color: var(--ibx-green); }
 .chip.unchanged, .chip.pending { color: var(--ibx-text-muted); }
 .chip.failed { color: #B4231E; }
+.chip.exists { color: var(--ibx-blue-gray); }
+.chip.excluded { color: var(--ibx-text-muted); }
+.tasks { display: flex; gap: 0; margin: 0 0 20px; border: 2px solid var(--ibx-green); width: fit-content; }
+.tasks button {
+  border: 0; background: transparent; color: var(--ibx-green); padding: 10px 22px;
+}
+.tasks button.active { background: var(--ibx-green); color: var(--ibx-white); }
+tr.excluded td { color: var(--ibx-text-muted); text-decoration: line-through; }
+tr.excluded td.keep { text-decoration: none; }
+select[multiple] { padding: 2px; font-size: 12px; }
+.row-actions { display: flex; gap: 12px; margin-bottom: 10px; font-size: 12px; }
 a { color: var(--ibx-green); text-decoration: underline; }
 @media (max-width: 980px) { main { grid-template-columns: 1fr; } }
 </style>
@@ -132,6 +143,11 @@ a { color: var(--ibx-green); text-decoration: underline; }
 
 <main>
   <section>
+    <div class="tasks" id="task_switch">
+      <button id="task_sites" class="active" type="button">Sites data</button>
+      <button id="task_devices" type="button">Device data</button>
+    </div>
+
     <div class="card rail">
       <h2>Credentials</h2>
       <label for="config_file">Credentials ini file</label>
@@ -153,6 +169,7 @@ a { color: var(--ibx-green); text-decoration: underline; }
       <datalist id="key_list"></datalist>
       <p class="hint"><a href="#" id="load_keys">Load the keys in use</a> to see which are populated.</p>
 
+      <div id="site_fields">
       <label for="class_key">Classification EA / tag key (optional)</label>
       <input type="text" id="class_key" placeholder="kentik_class">
       <p class="hint">Values: infrastructure, user_access or other. Overrides the heuristic.</p>
@@ -166,22 +183,57 @@ a { color: var(--ibx-green); text-decoration: underline; }
       <label for="ip_space">UDDI IP space id (optional)</label>
       <input type="text" id="ip_space">
 
-      <fieldset>
+      </div>
+
+      <fieldset id="scope_fields">
         <legend>Scope</legend>
         <label for="site_filter">Site name filter (glob)</label>
         <input type="text" id="site_filter" placeholder="LON-*">
         <label for="max_prefix_len">Aggregate up to prefix length</label>
         <input type="number" id="max_prefix_len" min="1" max="32" placeholder="0 = exact collapse only">
         <div class="check"><input type="checkbox" id="include_address_blocks"><label for="include_address_blocks">Include address blocks / containers</label></div>
-        <div class="check"><input type="checkbox" id="replace_networks"><label for="replace_networks">Replace Kentik network lists (default: add to them)</label></div>
       </fieldset>
 
       <fieldset>
-        <legend>Devices (report only)</legend>
-        <div class="check"><input type="checkbox" id="devices"><label for="devices">Include device candidates</label></div>
+        <legend>Devices</legend>
+        <div class="check" id="devices_row"><input type="checkbox" id="devices"><label for="devices">Include device candidates in the site report</label></div>
         <div class="check"><input type="checkbox" id="use_insight"><label for="use_insight">NIOS Network Insight</label></div>
         <div class="check"><input type="checkbox" id="use_uai"><label for="use_uai">Universal Asset Insights</label></div>
         <div class="check"><input type="checkbox" id="use_gateways"><label for="use_gateways">Infer from DHCP routers option</label></div>
+
+        <div id="device_fields" class="hidden">
+          <label for="device_mode">Create devices for</label>
+          <select id="device_mode">
+            <option value="flow">Flows</option>
+            <option value="nms">NMS</option>
+          </select>
+
+          <div id="flow_fields">
+            <label for="plan_select">Licence plan</label>
+            <select id="plan_select"></select>
+            <label for="plan_id">Plan id</label>
+            <input type="number" id="plan_id" min="1" placeholder="from the plan above">
+            <p class="hint"><a href="#" id="load_plans">Load plans</a> — the free plan is picked by default. Licensing is not visible to every service account; if the list comes back empty, type the plan id here.</p>
+
+            <label for="sending_ips">Default sending IPs</label>
+            <select id="sending_ips">
+              <option value="mgmt">Management IP only</option>
+              <option value="all">Every discovered interface</option>
+            </select>
+            <p class="hint">Override per device in the results table.</p>
+          </div>
+
+          <div id="nms_fields" class="hidden">
+            <label for="agent_id">NMS agent (required)</label>
+            <select id="agent_id"></select>
+            <label for="credential_name">SNMP credential (optional)</label>
+            <select id="credential_name"></select>
+            <p class="hint"><a href="#" id="load_nms">Load agents and credentials</a></p>
+          </div>
+
+          <div class="check"><input type="checkbox" id="update_devices"><label for="update_devices">Update site / sending IPs of devices already in Kentik</label></div>
+          <div class="check"><input type="checkbox" id="allow_over_capacity"><label for="allow_over_capacity">Allow more devices than the plan has slots for</label></div>
+        </div>
       </fieldset>
 
       <fieldset>
@@ -234,6 +286,17 @@ a { color: var(--ibx-green); text-decoration: underline; }
       <h2>Device candidates</h2>
       <div class="scroll"><table id="devices_table"></table></div>
       <p class="hint">Devices are reported only. Creating them in Kentik consumes a licensed device slot, needs a plan_id, and needs the flow exporter source address, which is not necessarily the management IP shown here.</p>
+    </div>
+
+    <div class="card hidden" id="device_card">
+      <h2>Devices</h2>
+      <div class="row-actions">
+        <a href="#" id="include_all">Include all</a>
+        <a href="#" id="exclude_all">Exclude all</a>
+        <span class="muted" id="device_summary"></span>
+      </div>
+      <div class="scroll"><table id="device_plan_table"></table></div>
+      <p class="hint">Unticking a device excludes it from both the apply and the export. Sending IPs default to the management address; pick others from the interface list.</p>
     </div>
 
     <div class="card hidden" id="export_card">

@@ -47,6 +47,7 @@ __author__ = 'Chris Marrison'
 __author_email__ = 'chris@infoblox.com'
 __license__ = 'BSD'
 
+import ipaddress
 import logging
 from ibx_kentik_prepop.model import ROLE_FIREWALL, ROLE_OTHER, ROLE_ROUTER, ROLE_SWITCH
 
@@ -155,7 +156,21 @@ def site_for_ip(address: str, subnets: list) -> str:
     Returns:
         str: site value, empty string when no subnet contains the address
     '''
-    import ipaddress
+    site, _ = _best_match(address, subnets)
+    return site
+
+
+def _best_match(address: str, subnets: list) -> tuple:
+    '''
+    Most specific subnet containing an address
+
+    Parameters:
+        address (str): IP address
+        subnets (list): normalised subnet records
+
+    Returns:
+        tuple: (site value, matching prefix length) - ('', -1) when no match
+    '''
     site = ''
     best = -1
 
@@ -171,11 +186,61 @@ def site_for_ip(address: str, subnets: list) -> str:
             except (ValueError, TypeError):
                 continue
             if network.version == ip.version and ip in network:
-                if network.prefixlen > best:
+                if network.prefixlen > best and record.get('site'):
                     best = network.prefixlen
                     site = record.get('site', '')
 
-    return site
+    return site, best
+
+
+def match_site(device, subnets: list, location: str = '') -> tuple:
+    '''
+    Work out which site a device belongs to, and say how it was decided
+
+    Tried in order: the device's own location attribute when it names a site we
+    derived, then the most specific subnet containing any of its interface
+    addresses, then its management address. Reporting the rule that matched
+    matters - a device placed by a /8 is a much weaker claim than one placed by
+    the /30 on its uplink.
+
+    Parameters:
+        device (Device): the device to place
+        subnets (list): normalised subnet records
+        location (str): the device's own location/site attribute, if any
+
+    Returns:
+        tuple: (site value, rule name) - rule is location, interface, mgmt or
+            unmatched
+    '''
+    site = ''
+    rule = 'unmatched'
+
+    known = {}
+    for record in subnets:
+        value = record.get('site', '')
+        if value:
+            known.setdefault(str(value).strip().casefold(), value)
+
+    if location and str(location).strip().casefold() in known:
+        site = known[str(location).strip().casefold()]
+        rule = 'location'
+    else:
+        best = -1
+        for interface in device.interfaces or []:
+            candidate, prefixlen = _best_match(interface.get('address', ''), subnets)
+            if candidate and prefixlen > best:
+                best = prefixlen
+                site = candidate
+                rule = 'interface'
+        candidate, prefixlen = _best_match(device.mgmt_ip, subnets)
+        if candidate and prefixlen > best:
+            site = candidate
+            rule = 'mgmt'
+
+    if not site:
+        rule = 'unmatched'
+
+    return site, rule
 
 
 def count_keys(records: list, key_field: str) -> dict:

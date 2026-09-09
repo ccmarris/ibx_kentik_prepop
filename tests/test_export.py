@@ -87,9 +87,9 @@ def test_device_requests_fill_site_id_only_when_known():
     by_name = {r['body']['device']['device_name']: r['body']['device']
                for r in requests}
 
-    assert by_name['lon_rtr_01']['site_id'] == '42'
+    assert by_name['lon_rtr_01']['site_id'] == 42
     assert 'site_id' not in by_name['nyc_fw_01']
-    assert all(r['path'] == '/api/v5/device' for r in requests)
+    assert all(r['path'] == '/device/v202504beta2/device' for r in requests)
 
 
 def test_add_device_csv_matches_the_kentik_loader_columns():
@@ -119,16 +119,48 @@ def test_render_rejects_an_unknown_format():
         export.render(sample_plan(), make_config(), 'nonsense')
 
 
-def test_export_writes_every_artefact(tmp_path):
+def test_export_writes_the_artefacts_for_flow_mode(tmp_path):
     written = export.export(sample_plan(), make_config(),
                             str(tmp_path / 'sub' / 'tenant-a'))
     names = sorted(p.name for p in (tmp_path / 'sub').iterdir())
 
-    assert names == ['tenant-a-devices-add.csv', 'tenant-a-devices-nms.csv',
-                     'tenant-a-devices.json', 'tenant-a-sites.csv',
-                     'tenant-a-sites.json']
-    assert len(written) == 5
+    assert names == ['tenant-a-devices-add.csv', 'tenant-a-devices.json',
+                     'tenant-a-sites.csv', 'tenant-a-sites.json']
+    assert len(written) == 4
     assert all(note for _, note in written)
+
+
+def test_export_swaps_the_device_csv_in_nms_mode(tmp_path):
+    plan = sample_plan()
+    plan.device_mode = 'nms'
+    export.export(plan, make_config(), str(tmp_path / 'tenant-nms'))
+    names = sorted(p.name for p in tmp_path.iterdir())
+
+    assert 'tenant-nms-devices-nms.csv' in names
+    assert 'tenant-nms-devices-add.csv' not in names
+
+
+def test_export_omits_excluded_devices(tmp_path):
+    from ibx_kentik_prepop.model import DevicePlan
+    plan = sample_plan()
+    plan.device_entries = [
+        DevicePlan(device=plan.devices[0], action='create', site_id='42'),
+        DevicePlan(device=plan.devices[1], action='create', excluded=True,
+                   exclude_reason="excluded by 'nyc-fw-01'"),
+    ]
+    text = export.render(plan, make_config(), 'devices-json')
+
+    assert 'lon_rtr_01' in text
+    assert 'nyc_fw_01' not in text
+
+
+def test_device_task_export_has_no_site_artefacts():
+    from ibx_kentik_prepop.model import DevicePlan, TASK_DEVICES
+    plan = sample_plan()
+    plan.task = TASK_DEVICES
+    plan.device_entries = [DevicePlan(device=plan.devices[0], action='create')]
+
+    assert export.applicable_formats(plan) == ['devices-json', 'devices-add-csv']
 
 
 def test_export_skips_device_files_without_devices(tmp_path):
@@ -151,8 +183,7 @@ def test_applicable_formats_skips_empty_artefacts():
     for entry in plan.entries:
         entry.action = ACTION_NO_CHANGE
 
-    assert export.applicable_formats(plan) == ['devices-json', 'devices-add-csv',
-                                               'devices-nms-csv']
+    assert export.applicable_formats(plan) == ['devices-json', 'devices-add-csv']
     assert 'sites-json' in export.applicable_formats(plan, include_unchanged=True)
 
     plan.devices = []

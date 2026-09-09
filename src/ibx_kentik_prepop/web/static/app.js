@@ -2,22 +2,212 @@
 
 const VALUE_FIELDS = ['config_file', 'source', 'site_key', 'class_key',
                       'site_type_key', 'network_view', 'ip_space', 'site_filter',
-                      'max_prefix_len', 'export_prefix'];
-const FLAG_FIELDS = ['include_address_blocks', 'replace_networks', 'devices',
+                      'max_prefix_len', 'export_prefix', 'device_mode',
+                      'sending_ips', 'plan_id', 'agent_id', 'credential_name'];
+const FLAG_FIELDS = ['include_address_blocks', 'devices',
                      'use_insight', 'use_uai', 'use_gateways',
-                     'export_include_unchanged'];
+                     'export_include_unchanged', 'update_devices',
+                     'allow_over_capacity'];
 
 let currentPlan = null;
+let currentTask = 'sites';
+let excluded = {};
+let sendingIps = {};
 
 function el(id) {
   return document.getElementById(id);
 }
 
 function formBody() {
-  const body = {};
+  const body = { task: currentTask };
   VALUE_FIELDS.forEach(function (field) { body[field] = el(field).value.trim(); });
   FLAG_FIELDS.forEach(function (field) { body[field] = el(field).checked; });
+  body.exclude_device = Object.keys(excluded).filter(function (name) {
+    return excluded[name];
+  });
+  body.sending_ip_map = sendingIps;
   return body;
+}
+
+function setTask(task) {
+  currentTask = task;
+  currentPlan = null;
+  el('task_sites').classList.toggle('active', task === 'sites');
+  el('task_devices').classList.toggle('active', task === 'devices');
+  el('site_fields').classList.toggle('hidden', task !== 'sites');
+  el('scope_fields').classList.toggle('hidden', task !== 'sites');
+  el('devices_row').classList.toggle('hidden', task !== 'sites');
+  el('device_fields').classList.toggle('hidden', task !== 'devices');
+  el('run_apply').textContent = task === 'devices'
+    ? 'Apply devices to Kentik' : 'Apply to Kentik';
+  ['stats_card', 'warnings_card', 'sites_card', 'subnets_card', 'devices_card',
+   'device_card', 'export_card', 'apply_card'].forEach(function (id) {
+    show(id, false);
+  });
+  el('run_apply').disabled = true;
+  el('apply_hint').textContent =
+    'Apply is enabled once a dry run finds ' +
+    (task === 'devices' ? 'devices to create.' : 'sites to create or update.');
+  setStatus(task === 'devices'
+    ? 'Device data: sites must already exist in Kentik for devices to be attached to them.'
+    : 'Sites data.', false);
+}
+
+function updateDeviceMode() {
+  const nms = el('device_mode').value === 'nms';
+  el('flow_fields').classList.toggle('hidden', nms);
+  el('nms_fields').classList.toggle('hidden', !nms);
+}
+
+function deviceDetail(entry) {
+  if (entry.exclude_reason) { return entry.exclude_reason; }
+  if (entry.mismatch && Object.keys(entry.mismatch).length) {
+    return Object.keys(entry.mismatch).map(function (field) {
+      return field + ': kentik=' + entry.mismatch[field].kentik +
+             ' derived=' + entry.mismatch[field].derived;
+    }).join('; ');
+  }
+  return entry.kentik_id ? 'id ' + entry.kentik_id : '';
+}
+
+function renderDevicePlan(plan) {
+  const rows = (plan.device_entries || []).map(function (entry) {
+    const name = entry.name;
+    const interfaces = (entry.interfaces || []).map(function (iface) {
+      return iface.address;
+    }).filter(function (address) { return address; });
+    const selected = sendingIps[name] || entry.sending_ips || [];
+    const options = interfaces.map(function (address) {
+      return '<option value="' + escapeHtml(address) + '"' +
+        (selected.indexOf(address) >= 0 ? ' selected' : '') + '>' +
+        escapeHtml(address) + '</option>';
+    }).join('');
+    const picker = interfaces.length
+      ? '<select multiple size="' + Math.min(interfaces.length, 3) +
+        '" data-device="' + escapeHtml(name) + '">' + options + '</select>'
+      : '<span class="muted">none</span>';
+
+    return '<tr data-device="' + escapeHtml(name) + '"' +
+      (entry.excluded ? ' class="excluded"' : '') + '>' +
+      '<td class="keep"><input type="checkbox" data-include="' + escapeHtml(name) +
+      '"' + (entry.excluded ? '' : ' checked') + '></td>' +
+      '<td>' + escapeHtml(name) + '</td>' +
+      '<td>' + escapeHtml(entry.kentik_name || '') + '</td>' +
+      '<td><span class="chip ' + escapeHtml(entry.excluded ? 'excluded' : entry.action) +
+      '">' + escapeHtml(entry.excluded ? 'excluded' : entry.action) + '</span></td>' +
+      '<td>' + escapeHtml(entry.role) + '</td>' +
+      '<td>' + escapeHtml(entry.mgmt_ip) + '</td>' +
+      '<td class="keep">' + picker + '</td>' +
+      '<td>' + escapeHtml(entry.site_name || '') + '</td>' +
+      '<td>' + escapeHtml(entry.site_match || '') + '</td>' +
+      '<td>' + escapeHtml(entry.origin) + '</td>' +
+      '<td>' + escapeHtml(deviceDetail(entry)) + '</td></tr>';
+  }).join('');
+
+  el('device_plan_table').innerHTML =
+    '<thead><tr><th>use</th><th>device</th><th>kentik name</th><th>action</th>' +
+    '<th>role</th><th>mgmt ip</th><th>sending ips</th><th>site</th>' +
+    '<th>matched by</th><th>origin</th><th>detail</th></tr></thead><tbody>' +
+    rows + '</tbody>';
+
+  el('device_plan_table').querySelectorAll('input[data-include]').forEach(function (box) {
+    box.addEventListener('change', function () {
+      excluded[box.dataset.include] = !box.checked;
+      box.closest('tr').classList.toggle('excluded', !box.checked);
+      invalidatePlan('Selection changed - run the dry run again to apply.');
+    });
+  });
+  el('device_plan_table').querySelectorAll('select[data-device]').forEach(function (picker) {
+    picker.addEventListener('change', function () {
+      sendingIps[picker.dataset.device] = Array.from(picker.selectedOptions)
+        .map(function (option) { return option.value; });
+      invalidatePlan('Sending IPs changed - run the dry run again to apply.');
+    });
+  });
+
+  const capacity = plan.capacity || {};
+  const slots = (capacity.remaining === undefined || capacity.remaining === null)
+    ? '' : capacity.remaining + ' of ' + capacity.max_devices + ' slot(s) left';
+  el('device_summary').textContent =
+    plan.stats.device_actions.create + ' to create, ' +
+    plan.stats.device_actions.exists + ' already in Kentik, ' +
+    plan.stats.device_actions.update + ' to update, ' +
+    plan.stats.excluded_devices + ' excluded. Mode: ' + plan.device_mode +
+    (plan.plan_name ? '. Plan: ' + plan.plan_name : '') +
+    (slots ? ' (' + slots + ')' : '');
+  show('device_card', true);
+}
+
+function invalidatePlan(message) {
+  currentPlan = null;
+  el('run_apply').disabled = true;
+  el('apply_hint').textContent = message;
+}
+
+async function loadPlans(event) {
+  if (event) { event.preventDefault(); }
+  const params = new URLSearchParams({ config_file: el('config_file').value.trim() });
+  try {
+    const response = await fetch('/api/kentik-plans?' + params.toString());
+    const data = await response.json();
+    if (data.error) { setStatus(data.error, true); return; }
+    const plans = data.plans || [];
+    if (!plans.length) {
+      el('plan_select').innerHTML =
+        '<option value="">-- none returned by the API --</option>';
+      setStatus('The plans API returned nothing - licensing may not be visible ' +
+                'to this service account. Type the plan id instead.', true);
+      return;
+    }
+
+    const wanted = String(data.default || '').replace(/_/g, ' ').toLowerCase();
+    let preferred = plans.filter(function (plan) {
+      return String(plan.name).replace(/_/g, ' ').toLowerCase() === wanted;
+    })[0];
+    if (!preferred) {
+      preferred = plans.filter(function (plan) {
+        return String(plan.name).toLowerCase().indexOf('free') >= 0;
+      })[0];
+    }
+    if (!preferred) { preferred = plans[0]; }
+
+    el('plan_select').innerHTML = plans.map(function (plan) {
+      const slots = plan.remaining === null ? 'capacity unknown'
+        : plan.remaining + '/' + plan.max_devices + ' free';
+      return '<option value="' + plan.id + '"' +
+        (plan.id === preferred.id ? ' selected' : '') + '>' +
+        escapeHtml(plan.name) + ' (id ' + plan.id + ', ' + slots + ')</option>';
+    }).join('');
+    el('plan_id').value = preferred.id;
+    setStatus(plans.length + ' plan(s) loaded, using ' + preferred.name + '.', false);
+  } catch (error) {
+    setStatus('Could not load plans: ' + error, true);
+  }
+}
+
+async function loadNms(event) {
+  if (event) { event.preventDefault(); }
+  const params = new URLSearchParams({ config_file: el('config_file').value.trim() });
+  try {
+    const response = await fetch('/api/kentik-nms?' + params.toString());
+    const data = await response.json();
+    if (data.error) { setStatus(data.error, true); return; }
+    el('agent_id').innerHTML = '<option value="">-- select an agent --</option>' +
+      (data.agents || []).map(function (agent) {
+        return '<option value="' + escapeHtml(agent.id) + '">' +
+          escapeHtml(agent.name || agent.id) +
+          (agent.status ? ' (' + escapeHtml(agent.status) + ')' : '') + '</option>';
+      }).join('');
+    el('credential_name').innerHTML = '<option value="">-- none --</option>' +
+      (data.credentials || []).map(function (credential) {
+        return '<option value="' + escapeHtml(credential.name) + '">' +
+          escapeHtml(credential.name) + '</option>';
+      }).join('');
+    setStatus((data.agents || []).length + ' agent(s) and ' +
+              (data.credentials || []).length + ' credential(s) loaded.', false);
+  } catch (error) {
+    setStatus('Could not load agents: ' + error, true);
+  }
 }
 
 function setStatus(message, isError) {
@@ -75,6 +265,33 @@ function renderStats(stats) {
 function renderPlan(plan) {
   currentPlan = plan;
   renderStats(plan.stats);
+
+  if (plan.task === 'devices') {
+    renderDevicePlan(plan);
+    renderTable('warnings_table', ['category', 'message', 'detail'],
+                plan.warnings || []);
+    show('warnings_card', (plan.warnings || []).length > 0);
+    ['sites_card', 'subnets_card', 'devices_card', 'apply_card'].forEach(function (id) {
+      show(id, false);
+    });
+
+    const changes = plan.stats.device_actions.create +
+      plan.stats.device_actions.update;
+    const reasons = (plan.apply_problems || []).slice();
+    if (!plan.kentik_available) {
+      reasons.push('Kentik credentials are not configured in ' +
+                   (plan.ini_file || 'the credentials file'));
+    }
+    if (!changes) { reasons.push('no devices need creating or updating'); }
+
+    el('run_apply').disabled = reasons.length > 0;
+    el('run_apply').title = reasons.join('. ');
+    el('apply_hint').textContent = reasons.length
+      ? 'Apply is disabled: ' + reasons.join('. ') + '.'
+      : changes + ' device(s) will change. You will see them listed before anything is written.';
+    setStatus('Device dry run complete. ' + el('device_summary').textContent, false);
+    return;
+  }
 
   const warnings = plan.warnings || [];
   renderTable('warnings_table', ['category', 'message', 'detail'], warnings);
@@ -367,9 +584,11 @@ function diffHtml(site) {
       lines.push('<li class="add">' + escapeHtml(cidr) + '  <span class="muted">' +
                  bucket.replace('_', ' ') + '</span></li>');
     });
-    ((site.removed || {})[bucket] || []).forEach(function (cidr) {
-      lines.push('<li class="remove">' + escapeHtml(cidr) + '  <span class="muted">' +
-                 bucket.replace('_', ' ') + '</span></li>');
+    ((site.extra || {})[bucket] || []).forEach(function (cidr) {
+      lines.push('<li class="extra">' + escapeHtml(cidr) +
+                 '  <span class="muted">' + bucket.replace('_', ' ') +
+                 ' - already in Kentik, not in Infoblox; the API cannot remove it' +
+                 '</span></li>');
     });
   });
   if (!lines.length) {
@@ -382,14 +601,43 @@ function diffHtml(site) {
     '</span><ul>' + lines.join('') + '</ul></p>';
 }
 
+function deviceDiffHtml(entry) {
+  const lines = [];
+  (entry.sending_ips || []).forEach(function (address) {
+    lines.push('<li class="add">' + escapeHtml(address) +
+               '  <span class="muted">sending ip</span></li>');
+  });
+  if (!lines.length) {
+    lines.push('<li class="muted">no sending IPs selected</li>');
+  }
+  return '<p class="diff"><span class="site">' + escapeHtml(entry.name) +
+    '</span> <span class="action">' + escapeHtml(entry.action) + ' &middot; ' +
+    escapeHtml(entry.role) + ' &middot; ' +
+    escapeHtml(entry.site_name || 'no site') +
+    (entry.site_id ? ' (id ' + escapeHtml(entry.site_id) + ')' : '') +
+    '</span><ul>' + lines.join('') + '</ul></p>';
+}
+
 function confirmApply(plan) {
-  const entries = changingEntries(plan);
-  const creates = entries.filter(function (s) { return s.action === 'create'; }).length;
-  el('confirm_summary').textContent =
-    creates + ' site(s) will be created and ' + (entries.length - creates) +
-    ' updated in Kentik. Sites are never deleted.';
-  el('confirm_body').innerHTML = entries.map(diffHtml).join('');
-  show('confirm_modal', true);
+  if (plan.task === 'devices') {
+    const entries = (plan.device_entries || []).filter(function (entry) {
+      return !entry.excluded &&
+        (entry.action === 'create' || entry.action === 'update');
+    });
+    const creates = entries.filter(function (e) { return e.action === 'create'; }).length;
+    const capacity = plan.capacity || {};
+    el('confirm_summary').textContent =
+      creates + ' device(s) will be created and ' + (entries.length - creates) +
+      ' re-placed in Kentik, in ' + plan.device_mode + ' mode' +
+      (plan.plan_name ? ' on plan ' + plan.plan_name : '') + '. ' +
+      (capacity.remaining === undefined || capacity.remaining === null ? '' :
+       capacity.remaining + ' licensed slot(s) available. ') +
+      'Each device created consumes a slot.';
+    el('confirm_body').innerHTML = entries.map(deviceDiffHtml).join('');
+    show('confirm_modal', true);
+  } else {
+    confirmSites(plan);
+  }
 
   return new Promise(function (resolve) {
     function cleanup(answer) {
@@ -405,24 +653,44 @@ function confirmApply(plan) {
   });
 }
 
+function confirmSites(plan) {
+  const entries = changingEntries(plan);
+  const creates = entries.filter(function (s) { return s.action === 'create'; }).length;
+  el('confirm_summary').textContent =
+    creates + ' site(s) will be created and ' + (entries.length - creates) +
+    ' updated in Kentik. Kentik merges site subnet lists, so this only ever ' +
+    'adds prefixes - nothing is removed or deleted.';
+  el('confirm_body').innerHTML = entries.map(diffHtml).join('');
+  show('confirm_modal', true);
+}
+
 function startApplyTable(plan) {
-  const rows = changingEntries(plan).map(function (site) {
-    return '<tr data-site="' + escapeHtml(site.name) + '"><td>' +
-      escapeHtml(site.name) + '</td><td>' + escapeHtml(site.action) +
+  const isDevices = plan.task === 'devices';
+  const items = isDevices
+    ? (plan.device_entries || []).filter(function (entry) {
+        return !entry.excluded &&
+          (entry.action === 'create' || entry.action === 'update');
+      })
+    : changingEntries(plan);
+  const rows = items.map(function (item) {
+    return '<tr data-row="' + escapeHtml(item.name) + '"><td>' +
+      escapeHtml(item.name) + '</td><td>' + escapeHtml(item.action) +
       '</td><td class="status"><span class="chip pending">pending</span></td>' +
       '<td class="detail"></td></tr>';
   }).join('');
   el('apply_table').innerHTML =
-    '<thead><tr><th>site</th><th>action</th><th>result</th><th>detail</th></tr>' +
+    '<thead><tr><th>' + (isDevices ? 'device' : 'site') +
+    '</th><th>action</th><th>result</th><th>detail</th></tr>' +
     '</thead><tbody>' + rows + '</tbody>';
   el('apply_note').textContent = '';
   show('apply_card', true);
 }
 
 function applyEvent(event) {
-  if (event.type === 'site') {
-    const row = el('apply_table').querySelector('tr[data-site="' +
-      (window.CSS && CSS.escape ? CSS.escape(event.site) : event.site) + '"]');
+  if (event.type === 'site' || event.type === 'device') {
+    const name = event.site || event.device;
+    const row = el('apply_table').querySelector('tr[data-row="' +
+      (window.CSS && CSS.escape ? CSS.escape(name) : name) + '"]');
     if (!row) { return; }
     row.querySelector('.status').innerHTML =
       '<span class="chip ' + escapeHtml(event.status) + '">' +
@@ -494,9 +762,11 @@ async function runApply() {
     }
 
     if (summary) {
+      const middle = summary.unchanged !== undefined
+        ? summary.unchanged + ' unchanged'
+        : summary.existing + ' already existed, ' + summary.excluded + ' excluded';
       const message = summary.created + ' created, ' + summary.updated +
-        ' updated, ' + summary.unchanged + ' unchanged, ' + summary.failed +
-        ' failed.';
+        ' updated, ' + middle + ', ' + summary.failed + ' failed.';
       setStatus(summary.failed ? 'Apply finished with errors: ' + message
                                : 'Apply finished: ' + message,
                 summary.failed > 0);
@@ -517,6 +787,45 @@ el('config_file').addEventListener('change', function () {
   currentPlan = null;
   loadConfig(path);
 });
+el('task_sites').addEventListener('click', function () { setTask('sites'); });
+el('task_devices').addEventListener('click', function () {
+  setTask('devices');
+  if (!el('plan_select').options.length) { loadPlans(); }
+});
+el('device_mode').addEventListener('change', function () {
+  updateDeviceMode();
+  invalidatePlan('Mode changed - run the dry run again to apply.');
+  if (el('device_mode').value === 'nms' && !el('agent_id').options.length) {
+    loadNms();
+  }
+});
+el('load_plans').addEventListener('click', loadPlans);
+el('plan_select').addEventListener('change', function () {
+  if (el('plan_select').value) { el('plan_id').value = el('plan_select').value; }
+  invalidatePlan('Plan changed - run the dry run again to apply.');
+});
+el('plan_id').addEventListener('change', function () {
+  invalidatePlan('Plan id changed - run the dry run again to apply.');
+});
+el('load_nms').addEventListener('click', loadNms);
+el('include_all').addEventListener('click', function (event) {
+  event.preventDefault();
+  excluded = {};
+  invalidatePlan('All devices included - run the dry run again to apply.');
+  el('device_plan_table').querySelectorAll('input[data-include]').forEach(function (box) {
+    box.checked = true;
+    box.closest('tr').classList.remove('excluded');
+  });
+});
+el('exclude_all').addEventListener('click', function (event) {
+  event.preventDefault();
+  el('device_plan_table').querySelectorAll('input[data-include]').forEach(function (box) {
+    box.checked = false;
+    excluded[box.dataset.include] = true;
+    box.closest('tr').classList.add('excluded');
+  });
+  invalidatePlan('All devices excluded - run the dry run again to apply.');
+});
 el('load_keys').addEventListener('click', loadKeys);
 el('check_kentik').addEventListener('click', checkKentik);
 el('run_plan').addEventListener('click', runPlan);
@@ -524,3 +833,5 @@ el('run_export').addEventListener('click', runExport);
 el('run_apply').addEventListener('click', runApply);
 loadConfig();
 loadInis();
+updateDeviceMode();
+setTask('sites');

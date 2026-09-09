@@ -94,8 +94,19 @@ DEFAULT_KENTIK_GRPC_BASE_URL = 'https://grpc.api.kentik.com'
 DEFAULT_SITE_LIST = '/site/v202211/sites'
 DEFAULT_SITE_CREATE = '/site/v202211/sites'
 DEFAULT_SITE_UPDATE = '/site/v202211/sites/{site_id}'
-DEFAULT_DEVICE_LIST = '/api/v5/devices'
-DEFAULT_DEVICE_CREATE = '/api/v5/device'
+# Devices use the versioned device API rather than legacy /api/v5/device,
+# because only that schema carries the nms block needed for NMS devices.
+# (Verified against kentik/api-schema-public
+# proto/kentik/device/v202504beta2/device.proto.)
+DEFAULT_DEVICE_LIST = '/device/v202504beta2/device'
+DEFAULT_DEVICE_CREATE = '/device/v202504beta2/device'
+DEFAULT_DEVICE_READ = '/device/v202504beta2/device/{device_id}'
+DEFAULT_DEVICE_UPDATE = '/device/v202504beta2/device/{device_id}'
+# Plans come from the documented v5 admin API (id, name, active, max_devices,
+# max_fps, deviceTypes, devices).
+DEFAULT_PLAN_LIST = '/api/v5/plans'
+DEFAULT_AGENT_LIST = '/kagent/v202401/agents'
+DEFAULT_CREDENTIAL_LIST = '/credential/v202407alpha1/group'
 DEFAULT_AUTH_EMAIL_HEADER = 'X-CH-Auth-Email'
 DEFAULT_AUTH_TOKEN_HEADER = 'X-CH-Auth-API-Token'
 
@@ -106,6 +117,22 @@ DEFAULT_MAX_PREFIX_LEN = 0
 DEFAULT_INFRA_PATTERNS = ('mgmt', 'management', 'transit', 'p2p',
                           'point-to-point', 'loopback', 'infra', 'wan')
 DEFAULT_INFRA_PREFIX_LEN = 30
+# EA/tag names looked for when populating the Kentik site postal address and
+# coordinates. Matched case-insensitively; first hit wins. PostalAddress
+# requires address, city and country, so a partial address is not submitted.
+DEFAULT_ADDRESS_KEYS = {
+    'address': ('address', 'street', 'street_address', 'site_address', 'address1'),
+    'city': ('city', 'town', 'locality'),
+    'region': ('region', 'state', 'county', 'province'),
+    'postal_code': ('postal_code', 'postcode', 'post_code', 'zip', 'zip_code'),
+    'country': ('country', 'country_code', 'country_name'),
+}
+DEFAULT_GEO_KEYS = {
+    'lat': ('latitude', 'lat'),
+    'lon': ('longitude', 'long', 'lon', 'lng'),
+}
+REQUIRED_ADDRESS_FIELDS = ('address', 'city', 'country')
+
 DEFAULT_SITE_TYPE_MAP = {
     'dc': 'SITE_TYPE_DATA_CENTER',
     'datacenter': 'SITE_TYPE_DATA_CENTER',
@@ -119,6 +146,15 @@ DEFAULT_SITE_TYPE_MAP = {
     'pop': 'SITE_TYPE_CONNECTIVITY',
     'customer': 'SITE_TYPE_CUSTOMER',
 }
+
+# Device defaults. The plan is resolved by name so it works on any tenant;
+# Free_Flow is Kentik's no-cost flow plan.
+DEFAULT_PLAN_NAME = 'Free_Flow'
+DEFAULT_DEVICE_MODE = 'flow'
+DEFAULT_DEVICE_SUBTYPE = 'router'
+DEFAULT_SAMPLE_RATE = 1024
+DEFAULT_SENDING_IPS = 'mgmt'
+DEFAULT_SNMP_PORT = 161
 
 DEFAULT_TIMEOUT = 30
 
@@ -166,6 +202,11 @@ class KentikConfig:
     site_update: str = DEFAULT_SITE_UPDATE
     device_list: str = DEFAULT_DEVICE_LIST
     device_create: str = DEFAULT_DEVICE_CREATE
+    device_read: str = DEFAULT_DEVICE_READ
+    device_update: str = DEFAULT_DEVICE_UPDATE
+    plan_list: str = DEFAULT_PLAN_LIST
+    agent_list: str = DEFAULT_AGENT_LIST
+    credential_list: str = DEFAULT_CREDENTIAL_LIST
     auth_email_header: str = DEFAULT_AUTH_EMAIL_HEADER
     auth_token_header: str = DEFAULT_AUTH_TOKEN_HEADER
 
@@ -185,27 +226,42 @@ class SiteConfig:
     infra_prefix_len: int = DEFAULT_INFRA_PREFIX_LEN
     site_filter: str = ''
     include_address_blocks: bool = False
-    replace_networks: bool = False
+    address_keys: dict = field(default_factory=lambda: dict(DEFAULT_ADDRESS_KEYS))
+    geo_keys: dict = field(default_factory=lambda: dict(DEFAULT_GEO_KEYS))
+    use_address: bool = True
 
 
 @dataclass(frozen=True)
 class DeviceConfig:
     '''
-    Device discovery behaviour. Kentik device writes are not enabled in v1.
+    Device discovery and creation behaviour
     '''
     enabled: bool = False
     use_insight: bool = False
     use_uai: bool = False
     use_gateways: bool = False
     roles: tuple = ('router', 'switch', 'firewall')
+    mode: str = DEFAULT_DEVICE_MODE
+    subtype: str = DEFAULT_DEVICE_SUBTYPE
+    plan_name: str = DEFAULT_PLAN_NAME
     plan_id: int = 0
-    sample_rate: int = 1024
+    sample_rate: int = DEFAULT_SAMPLE_RATE
     minimize_snmp: bool = True
+    sending_ips: str = DEFAULT_SENDING_IPS
+    sending_ip_map: dict = field(default_factory=dict)
+    agent_id: str = ''
+    credential_name: str = ''
+    snmp_port: int = DEFAULT_SNMP_PORT
+    monitoring_template_id: int = 0
+    update_existing: bool = False
+    allow_over_capacity: bool = False
+    exclude: tuple = ()
 
 
 @dataclass(frozen=True)
 class ProjectConfig:
     source: str = 'uddi'
+    task: str = 'sites'
     nios: NiosConfig = field(default_factory=NiosConfig)
     uddi: UddiConfig = field(default_factory=UddiConfig)
     kentik: KentikConfig = field(default_factory=KentikConfig)
@@ -473,6 +529,11 @@ def build_config(args, ini_file: str = '', yaml_file: str = '') -> ProjectConfig
         site_update=str(kentik_yaml.get('site_update', DEFAULT_SITE_UPDATE)),
         device_list=str(kentik_yaml.get('device_list', DEFAULT_DEVICE_LIST)),
         device_create=str(kentik_yaml.get('device_create', DEFAULT_DEVICE_CREATE)),
+        device_read=str(kentik_yaml.get('device_read', DEFAULT_DEVICE_READ)),
+        device_update=str(kentik_yaml.get('device_update', DEFAULT_DEVICE_UPDATE)),
+        plan_list=str(kentik_yaml.get('plan_list', DEFAULT_PLAN_LIST)),
+        agent_list=str(kentik_yaml.get('agent_list', DEFAULT_AGENT_LIST)),
+        credential_list=str(kentik_yaml.get('credential_list', DEFAULT_CREDENTIAL_LIST)),
         auth_email_header=str(kentik_yaml.get('auth_email_header', DEFAULT_AUTH_EMAIL_HEADER)),
         auth_token_header=str(kentik_yaml.get('auth_token_header', DEFAULT_AUTH_TOKEN_HEADER)),
     )
@@ -480,6 +541,16 @@ def build_config(args, ini_file: str = '', yaml_file: str = '') -> ProjectConfig
     site_type_map = dict(DEFAULT_SITE_TYPE_MAP)
     for key, value in (site_yaml.get('site_type_map') or {}).items():
         site_type_map[str(key).strip().lower()] = str(value)
+
+    address_keys = {}
+    for field_name, candidates in DEFAULT_ADDRESS_KEYS.items():
+        override = (site_yaml.get('address_keys') or {}).get(field_name)
+        address_keys[field_name] = _as_tuple(override) or candidates
+
+    geo_keys = {}
+    for field_name, candidates in DEFAULT_GEO_KEYS.items():
+        override = (site_yaml.get('geo_keys') or {}).get(field_name)
+        geo_keys[field_name] = _as_tuple(override) or candidates
 
     site = SiteConfig(
         site_key=str(getattr(args, 'site_key', None) or site_yaml.get('site_key', '')).strip(),
@@ -495,9 +566,29 @@ def build_config(args, ini_file: str = '', yaml_file: str = '') -> ProjectConfig
         site_filter=str(getattr(args, 'site_filter', None) or site_yaml.get('site_filter', '')),
         include_address_blocks=_as_bool(getattr(args, 'include_address_blocks', None)
                                         or site_yaml.get('include_address_blocks'), False),
-        replace_networks=_as_bool(getattr(args, 'replace_networks', None)
-                                  or site_yaml.get('replace_networks'), False),
+        address_keys=address_keys,
+        geo_keys=geo_keys,
+        use_address=_as_bool(site_yaml.get('use_address'), True),
     )
+
+    mode = str(getattr(args, 'device_mode', None)
+               or device_yaml.get('mode', DEFAULT_DEVICE_MODE)).lower()
+    if mode not in ('flow', 'nms'):
+        raise ValueError(f"device mode must be 'flow' or 'nms', got {mode!r}")
+
+    sending_ips = str(getattr(args, 'sending_ips', None)
+                      or device_yaml.get('sending_ips', DEFAULT_SENDING_IPS)).lower()
+    if sending_ips not in ('mgmt', 'all'):
+        raise ValueError(f"sending_ips must be 'mgmt' or 'all', got {sending_ips!r}")
+
+    exclude = list(_as_tuple(getattr(args, 'exclude_device', None)))
+    exclude.extend(_as_tuple(device_yaml.get('exclude')))
+    exclude_file = getattr(args, 'exclude_file', None)
+    if exclude_file:
+        for line in Path(exclude_file).read_text(encoding='utf-8').splitlines():
+            entry = line.split('#')[0].strip()
+            if entry:
+                exclude.append(entry)
 
     device = DeviceConfig(
         enabled=_as_bool(getattr(args, 'devices', None) or device_yaml.get('enabled'), False),
@@ -507,20 +598,42 @@ def build_config(args, ini_file: str = '', yaml_file: str = '') -> ProjectConfig
         use_gateways=_as_bool(getattr(args, 'use_gateways', None)
                               or device_yaml.get('use_gateways'), False),
         roles=_as_tuple(device_yaml.get('roles')) or ('router', 'switch', 'firewall'),
-        plan_id=int(device_yaml.get('plan_id', 0)),
-        sample_rate=int(device_yaml.get('sample_rate', 1024)),
+        mode=mode,
+        subtype=str(device_yaml.get('subtype', DEFAULT_DEVICE_SUBTYPE)),
+        plan_name=str(getattr(args, 'plan_name', None)
+                      or device_yaml.get('plan_name', DEFAULT_PLAN_NAME)),
+        plan_id=int(getattr(args, 'plan_id', None) or device_yaml.get('plan_id', 0)),
+        sample_rate=int(device_yaml.get('sample_rate', DEFAULT_SAMPLE_RATE)),
         minimize_snmp=_as_bool(device_yaml.get('minimize_snmp'), True),
+        sending_ips=sending_ips,
+        sending_ip_map=dict(getattr(args, 'sending_ip_map', None) or {}),
+        agent_id=str(getattr(args, 'agent_id', None) or device_yaml.get('agent_id', '')),
+        credential_name=str(getattr(args, 'credential_name', None)
+                            or device_yaml.get('credential_name', '')),
+        snmp_port=int(device_yaml.get('snmp_port', DEFAULT_SNMP_PORT)),
+        monitoring_template_id=int(getattr(args, 'monitoring_template_id', None)
+                                   or device_yaml.get('monitoring_template_id', 0)),
+        update_existing=_as_bool(getattr(args, 'update_devices', None)
+                                 or device_yaml.get('update_existing'), False),
+        allow_over_capacity=_as_bool(getattr(args, 'allow_over_capacity', None)
+                                     or device_yaml.get('allow_over_capacity'), False),
+        exclude=tuple(dict.fromkeys(exclude)),
     )
 
     source = str(getattr(args, 'source', None) or raw.get('source', 'uddi')).lower()
     if source not in ('nios', 'uddi'):
         raise ValueError(f"source must be 'nios' or 'uddi', got {source!r}")
 
+    task = str(getattr(args, 'task', None) or raw.get('task', 'sites')).lower()
+    if task not in ('sites', 'devices'):
+        raise ValueError(f"task must be 'sites' or 'devices', got {task!r}")
+
     if site.max_prefix_len and not 1 <= site.max_prefix_len <= 32:
         raise ValueError('max_prefix_len must be between 1 and 32')
 
     config = ProjectConfig(
         source=source,
+        task=task,
         nios=nios,
         uddi=uddi,
         kentik=kentik,
@@ -529,7 +642,7 @@ def build_config(args, ini_file: str = '', yaml_file: str = '') -> ProjectConfig
         state_file=str(raw.get('state_file', DEFAULT_STATE_FILE)),
     )
 
-    logger.debug('Configuration assembled for source %s', source)
+    logger.debug('Configuration assembled for source %s, task %s', source, task)
     return config
 
 
@@ -554,6 +667,11 @@ def validate_source_credentials(config: ProjectConfig) -> list:
             problems.append('UDDI API key is not set ([UDDI] api_key)')
     if not config.site.site_key:
         problems.append('No site EA/tag key selected (--site-key)')
+    if config.task == 'devices' and not (config.device.use_insight
+                                         or config.device.use_uai
+                                         or config.device.use_gateways):
+        problems.append('The device task needs a device source '
+                        '(--use-insight, --use-uai or --use-gateways)')
     for problem in problems:
         logger.error('Configuration problem: %s', problem)
     return problems
