@@ -98,6 +98,9 @@ pre.log {
   position: fixed; inset: 0; background: rgba(16, 24, 32, 0.75);
   display: flex; align-items: center; justify-content: center; padding: 24px; z-index: 10;
 }
+/* .hidden and .modal have equal specificity, so hiding needs to be explicit
+   here or the overlay wins on document order and shows on page load. */
+.modal.hidden { display: none; }
 .modal-card {
   background: var(--ibx-white); border: 1px solid var(--ibx-steel);
   border-left: 4px solid var(--ibx-green); max-width: 760px; width: 100%;
