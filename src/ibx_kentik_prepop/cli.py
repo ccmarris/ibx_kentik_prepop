@@ -113,7 +113,7 @@ def parseargs():
                              '(default) or every discovered interface address')
     parser.add_argument('--plan-name', default=None,
                         help='Kentik plan to create flow devices under '
-                             '(default: Free_Flow)')
+                             "(default: 'Free Flowpak Plan')")
     parser.add_argument('--plan-id', type=int, default=None,
                         help='Kentik plan id, overriding --plan-name')
     parser.add_argument('--agent-id', default=None,

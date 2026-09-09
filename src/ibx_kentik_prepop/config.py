@@ -148,8 +148,8 @@ DEFAULT_SITE_TYPE_MAP = {
 }
 
 # Device defaults. The plan is resolved by name so it works on any tenant;
-# Free_Flow is Kentik's no-cost flow plan.
-DEFAULT_PLAN_NAME = 'Free_Flow'
+# 'Free Flowpak Plan' is Kentik's no-cost flow plan.
+DEFAULT_PLAN_NAME = 'Free Flowpak Plan'
 DEFAULT_DEVICE_MODE = 'flow'
 DEFAULT_DEVICE_SUBTYPE = 'router'
 DEFAULT_SAMPLE_RATE = 1024

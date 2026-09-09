@@ -546,10 +546,12 @@ class KENTIK:
 
         Resolution order: an explicit id, then the configured name matched
         case-insensitively with underscores and spaces treated as equivalent
-        (so Free_Flow, 'free flow' and 'Free Flow' all hit), then any active
-        plan whose name mentions 'free', then the first active plan. Anything
-        other than an exact hit is reported - the plan decides what the devices
-        cost, so a silent substitution is not acceptable.
+        (so 'Free Flowpak Plan', 'free_flowpak_plan' and 'Free Flowpak plan'
+        all hit), then a plan whose name contains the configured one or vice
+        versa (so 'Free Flowpak' still matches), then any active plan whose
+        name mentions 'free', then the first active plan. Anything other than
+        an exact hit is reported - the plan decides what the devices cost, so a
+        silent substitution is not acceptable.
 
         An id that the API does not list is still honoured: licensing is not
         visible to every service account, and the operator may know the id even
@@ -586,8 +588,16 @@ class KENTIK:
             chosen = next((p for p in plans if key(p.get('name')) == key(name)), None)
             if chosen is None:
                 active = [p for p in plans if p.get('active', True)]
+                near = [p for p in active
+                        if key(p.get('name')) and (key(name) in key(p.get('name'))
+                                                   or key(p.get('name')) in key(name))]
                 free = [p for p in active if 'free' in key(p.get('name'))]
-                if free:
+                if near:
+                    chosen = near[0]
+                    warning = (f'No plan named exactly {name!r}, using the '
+                               f'closest match {chosen.get("name")!r} (id '
+                               f'{chosen.get("id")})')
+                elif free:
                     chosen = free[0]
                     warning = (f'No plan named {name!r}, using the free plan '
                                f'{chosen.get("name")!r} (id {chosen.get("id")})')

@@ -76,7 +76,7 @@ device:
   # Licence plan for flow devices, resolved by name against GET /api/v5/plans.
   # Set plan_id when licensing is not visible to the service account, or to
   # pin a specific plan.
-  plan_name: Free_Flow
+  plan_name: Free Flowpak Plan
   plan_id: 0
   sample_rate: 1024
   minimize_snmp: true

@@ -105,7 +105,7 @@ Then the devices, once those sites exist:
 # dry run: what would be created, on which sites, with which sending IPs
 ./ibx_kentik_prepop.py -c ibx_kentik.ini --task devices --site-key Site --use-uai
 
-# create them for flow on the Free_Flow plan, skipping one
+# create them for flow on the free plan, skipping one
 ./ibx_kentik_prepop.py -c ibx_kentik.ini --task devices --site-key Site --use-uai \
     --exclude-device nyc-fw-01 --go
 
@@ -275,10 +275,11 @@ the apply refuses. SNMP credentials come from
 `GET /credential/v202407alpha1/group`.
 
 **The licence plan.** Plans are read from `GET /api/v5/plans` and resolved by
-name — `Free_Flow` by default, matched case-insensitively with underscores and
-spaces treated as equivalent. If that name is absent, any active plan mentioning
-"free" is preferred, then the first active plan, and the substitution is
-reported rather than made quietly. Licensing is not visible to every service
+name — **`Free Flowpak Plan`** by default (Kentik's no-cost flow plan), matched
+case-insensitively with underscores and spaces treated as equivalent. If that
+exact name is absent, the closest containing match is used (so `Free Flowpak`
+still resolves), then any active plan mentioning "free", then the first active
+plan — and every substitution is reported rather than made quietly. Licensing is not visible to every service
 account: when the API returns nothing, supply the id yourself with `--plan-id`
 (or the **Plan id** field in the UI) and it is used as given. Before writing,
 devices-to-create is checked against `max_devices` minus the devices already on

@@ -154,12 +154,39 @@ def test_update_device_placement_preserves_unknown_fields(monkeypatch):
     assert 'created_date' not in body and 'site' not in body
 
 
+def test_default_plan_name_is_the_free_flowpak_plan():
+    from conftest import make_config as base_config
+    assert base_config().device.plan_name == 'Free Flowpak Plan'
+
+
+def test_resolve_plan_matches_the_flowpak_plan_however_it_is_written():
+    plans = [{'id': 11, 'name': 'Free Flowpak Plan', 'active': True,
+              'max_devices': 5, 'devices': []}]
+    kentik = target()
+
+    for spelling in ('Free Flowpak Plan', 'free flowpak plan',
+                     'Free_Flowpak_Plan'):
+        capacity, warning = kentik.resolve_plan(spelling, plans=plans)
+        assert (capacity['id'], warning) == (11, '')
+
+
+def test_resolve_plan_accepts_a_near_miss_name_and_says_so():
+    plans = [{'id': 12, 'name': 'Free Flowpak', 'active': True,
+              'max_devices': 5, 'devices': []},
+             {'id': 13, 'name': 'Enterprise', 'active': True,
+              'max_devices': 50, 'devices': []}]
+    capacity, warning = target().resolve_plan('Free Flowpak Plan', plans=plans)
+
+    assert capacity['id'] == 12
+    assert 'closest match' in warning
+
+
 def test_resolve_plan_prefers_a_free_plan_when_the_name_is_absent():
     plans = [{'id': 3, 'name': 'Enterprise', 'active': True, 'max_devices': 50,
               'devices': []},
-             {'id': 4, 'name': 'Free Trial Flow', 'active': True,
+             {'id': 4, 'name': 'Free Trial Flowpak', 'active': True,
               'max_devices': 2, 'devices': []}]
-    capacity, warning = target().resolve_plan('Free_Flow', plans=plans)
+    capacity, warning = target().resolve_plan('Free Flowpak Plan', plans=plans)
 
     assert capacity['id'] == 4
     assert 'free plan' in warning
