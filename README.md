@@ -51,6 +51,12 @@ base_url = https://api.kentik.com
 grpc_base_url = https://grpc.api.kentik.com
 ```
 
+Section names are matched case-insensitively, so `[Kentik]`, `[kentik]` and
+`[KENTIK]` all work. A few key spellings are accepted per credential:
+`email`/`api_email`/`user`, `token`/`api_token`/`api_key`, `base_url`/`url`,
+`gm`/`grid_master`/`host`, `user`/`username`, `pass`/`password`, and
+`wapi_version`/`api_version`/`version`.
+
 Resolution priority is **CLI flag → environment variable → ini file**. The
 environment variables are `IBX_NIOS_GM`, `IBX_NIOS_USER`, `IBX_NIOS_PASS`,
 `IB_API_KEY`, `IB_BASE_URL`, `KENTIK_EMAIL`, `KENTIK_TOKEN`,
@@ -230,6 +236,11 @@ credentials file, source and site key (both have pickers showing what is
 available), run a dry run, read the warnings, and apply. **Build export**
 produces the same artefacts as `--export-kentik` with a download button per
 file.
+
+**Check the Kentik API** in the Environment card issues a read-only
+`GET /sites` and reports what came back, so you can prove the credentials and
+auth headers work before attempting a write. When Apply is disabled the hint
+under the buttons says exactly why.
 
 ### Applying from the UI
 

@@ -165,6 +165,39 @@ def _one_site_plan():
                                 merged={'user_access': ['10.1.0.0/24']})])
 
 
+def test_kentik_check_reports_missing_credentials(client, tmp_path):
+    other = tmp_path / 'nios-only.ini'
+    other.write_text('[NIOS]\ngm = 10.0.0.1\nuser = admin\npass = secret\n',
+                     encoding='utf-8')
+    payload = client.get('/api/kentik-check',
+                         query_string={'config_file': str(other)}).get_json()
+
+    assert payload['ok'] is False
+    assert 'token' in payload['error'] or 'email' in payload['error']
+
+
+def test_kentik_check_reports_a_successful_read(client, monkeypatch):
+    from ibx_kentik_prepop.web import server as web
+
+    class FakeKentik:
+        last_error = {}
+
+        def __init__(self, config):
+            pass
+
+        def get_sites(self):
+            return [{'id': '1', 'title': 'LON-DC1'}]
+
+        def error_text(self):
+            return ''
+
+    monkeypatch.setattr(web, 'KENTIK', FakeKentik)
+    payload = client.get('/api/kentik-check').get_json()
+
+    assert payload['ok'] is True
+    assert payload['sites'] == 1
+
+
 def test_apply_still_requires_confirmation(client):
     response = client.post('/api/apply', json={'site_key': 'Site'})
     assert response.status_code == 400

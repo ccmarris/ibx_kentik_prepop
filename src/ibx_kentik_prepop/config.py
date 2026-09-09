@@ -240,16 +240,48 @@ def read_ini(ini_file: str) -> dict:
         usable = False
 
     if usable:
-        for section in INI_SECTIONS:
-            if section in config:
+        # Section names are matched case-insensitively: [Kentik], [kentik] and
+        # [KENTIK] are the same section as far as this tool is concerned. An
+        # exact-case match is applied last so it wins if a file has both.
+        for canonical in INI_SECTIONS:
+            found = [s for s in config.sections()
+                     if s.casefold() == canonical.casefold() and s != canonical]
+            if canonical in config.sections():
+                found.append(canonical)
+            for section in found:
                 for key in config[section]:
-                    creds[section][key] = config[section][key].strip("'\"")
-                logger.debug('Read %d keys from [%s] in %s',
-                             len(creds[section]), section, ini_file)
+                    creds[canonical][key.strip().lower()] = \
+                        config[section][key].strip("'\"")
+            if found:
+                logger.debug('Read %d key(s) from [%s] in %s',
+                             len(creds[canonical]), found[-1], ini_file)
             else:
-                logger.debug('No [%s] section found in %s', section, ini_file)
+                logger.debug('No [%s] section found in %s', canonical, ini_file)
 
     return creds
+
+
+def _first(mapping: dict, *keys) -> str:
+    '''
+    Return the first non-empty value among several accepted key spellings
+
+    Different tools in this collection have used different names for the same
+    credential, so a handful of aliases are accepted per field.
+
+    Parameters:
+        mapping (dict): section values from the ini
+        keys: key names to try, in order of preference
+
+    Returns:
+        str: the first non-empty value, empty string when none are set
+    '''
+    value = ''
+    for key in keys:
+        candidate = mapping.get(key)
+        if candidate not in (None, ''):
+            value = candidate
+            break
+    return value
 
 
 def _as_bool(value, default: bool = False) -> bool:
@@ -385,12 +417,17 @@ def build_config(args, ini_file: str = '', yaml_file: str = '') -> ProjectConfig
     device_yaml = _section(raw, 'device')
 
     nios = NiosConfig(
-        gm=_resolve(getattr(args, 'gm', None), 'IBX_NIOS_GM', nios_ini.get('gm', ''),
+        gm=_resolve(getattr(args, 'gm', None), 'IBX_NIOS_GM',
+                    _first(nios_ini, 'gm', 'grid_master', 'host', 'master'),
                     nios_yaml.get('gm', '')),
-        user=_resolve(None, 'IBX_NIOS_USER', nios_ini.get('user', ''), 'admin'),
-        password=_resolve(None, 'IBX_NIOS_PASS', nios_ini.get('pass', '')),
+        user=_resolve(None, 'IBX_NIOS_USER', _first(nios_ini, 'user', 'username'),
+                      'admin'),
+        password=_resolve(None, 'IBX_NIOS_PASS',
+                          _first(nios_ini, 'pass', 'password')),
         wapi_version=str(nios_yaml.get('wapi_version',
-                                       nios_ini.get('wapi_version', DEFAULT_WAPI_VERSION))),
+                                       _first(nios_ini, 'wapi_version',
+                                              'api_version', 'version')
+                                       or DEFAULT_WAPI_VERSION)),
         valid_cert=_as_bool(nios_yaml.get('valid_cert', nios_ini.get('valid_cert')), False),
         network_view=_resolve(getattr(args, 'network_view', None), 'IBX_NIOS_VIEW',
                               nios_yaml.get('network_view', '')),
@@ -399,9 +436,11 @@ def build_config(args, ini_file: str = '', yaml_file: str = '') -> ProjectConfig
     )
 
     uddi = UddiConfig(
-        base_url=_resolve(None, 'IB_BASE_URL', uddi_ini.get('base_url', ''),
+        base_url=_resolve(None, 'IB_BASE_URL',
+                          _first(uddi_ini, 'base_url', 'url'),
                           uddi_yaml.get('base_url', DEFAULT_UDDI_BASE_URL)).rstrip('/'),
-        api_key=_resolve(None, 'IB_API_KEY', uddi_ini.get('api_key', '')),
+        api_key=_resolve(None, 'IB_API_KEY',
+                         _first(uddi_ini, 'api_key', 'apikey', 'key', 'token')),
         ip_space=_resolve(getattr(args, 'ip_space', None), 'IB_IP_SPACE',
                           uddi_yaml.get('ip_space', '')),
         verify_ssl=_as_bool(uddi_yaml.get('verify_ssl'), True),
@@ -414,9 +453,14 @@ def build_config(args, ini_file: str = '', yaml_file: str = '') -> ProjectConfig
     )
 
     kentik = KentikConfig(
-        email=_resolve(None, 'KENTIK_EMAIL', kentik_ini.get('email', '')),
-        token=_resolve(None, 'KENTIK_TOKEN', kentik_ini.get('token', '')),
-        base_url=_resolve(None, 'KENTIK_BASE_URL', kentik_ini.get('base_url', ''),
+        email=_resolve(None, 'KENTIK_EMAIL',
+                       _first(kentik_ini, 'email', 'api_email', 'user',
+                              'username')),
+        token=_resolve(None, 'KENTIK_TOKEN',
+                       _first(kentik_ini, 'token', 'api_token', 'api_key',
+                              'key')),
+        base_url=_resolve(None, 'KENTIK_BASE_URL',
+                          _first(kentik_ini, 'base_url', 'url'),
                           kentik_yaml.get('base_url', DEFAULT_KENTIK_BASE_URL)).rstrip('/'),
         grpc_base_url=_resolve(None, 'KENTIK_GRPC_BASE_URL',
                                kentik_ini.get('grpc_base_url', ''),

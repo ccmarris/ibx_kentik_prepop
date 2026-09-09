@@ -196,11 +196,14 @@ a { color: var(--ibx-green); text-decoration: underline; }
         <button class="secondary" id="run_export">Build export</button>
         <button class="secondary" id="run_apply" disabled>Apply to Kentik</button>
       </div>
+      <p class="hint" id="apply_hint">Apply is enabled once a dry run finds sites to create or update.</p>
     </div>
 
     <div class="card">
       <h2>Environment</h2>
       <div id="env" class="muted">Loading...</div>
+      <p class="hint"><a href="#" id="check_kentik">Check the Kentik API</a> — read-only, lists your sites.</p>
+      <div id="kentik_status" class="hint"></div>
     </div>
   </section>
 

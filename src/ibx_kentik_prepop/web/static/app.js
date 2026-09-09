@@ -126,9 +126,23 @@ function renderPlan(plan) {
   show('devices_card', devices.length > 0);
 
   show('apply_card', false);
-  const applyable = plan.kentik_available &&
-        (plan.stats.actions.create > 0 || plan.stats.actions.update > 0);
+  const changes = plan.stats.actions.create + plan.stats.actions.update;
+  const reasons = [];
+  if (!plan.kentik_available) {
+    reasons.push('Kentik credentials are not configured in ' +
+                 (plan.ini_file || 'the credentials file') +
+                 ((plan.kentik_problems || []).length
+                   ? ' (' + plan.kentik_problems.join('; ') + ')' : ''));
+  }
+  if (!changes) {
+    reasons.push('every site is already up to date, so there is nothing to apply');
+  }
+  const applyable = reasons.length === 0;
   el('run_apply').disabled = !applyable;
+  el('run_apply').title = applyable ? '' : reasons.join('. ');
+  el('apply_hint').textContent = applyable
+    ? changes + ' site(s) will change. You will see the per-site diff before anything is written.'
+    : 'Apply is disabled: ' + reasons.join('. ') + '.';
 
   let message = 'Dry run complete. ' + plan.stats.sites + ' site(s), ' +
         plan.stats.actions.create + ' to create, ' +
@@ -188,6 +202,27 @@ async function loadInis() {
   }
 }
 
+async function checkKentik(event) {
+  event.preventDefault();
+  const params = new URLSearchParams({
+    config_file: el('config_file').value.trim()
+  });
+  el('kentik_status').textContent = 'Checking...';
+  try {
+    const response = await fetch('/api/kentik-check?' + params.toString());
+    const data = await response.json();
+    if (data.ok) {
+      el('kentik_status').innerHTML = '<strong>Kentik reachable</strong> at ' +
+        escapeHtml(data.base_url) + ' — ' + data.sites + ' site(s) visible.';
+    } else {
+      el('kentik_status').textContent = 'Kentik check failed: ' +
+        (data.error || 'unknown error');
+    }
+  } catch (error) {
+    el('kentik_status').textContent = 'Kentik check failed: ' + error;
+  }
+}
+
 async function loadKeys(event) {
   event.preventDefault();
   const params = new URLSearchParams({
@@ -234,7 +269,12 @@ async function runPlan() {
       setStatus(data.error || 'Plan failed', true);
       return;
     }
-    renderPlan(data);
+    try {
+      renderPlan(data);
+    } catch (error) {
+      setStatus('The plan came back but could not be displayed: ' + error, true);
+      return;
+    }
   } catch (error) {
     setStatus('Plan failed: ' + error, true);
   } finally {
@@ -472,11 +512,13 @@ async function runApply() {
 el('config_file').addEventListener('change', function () {
   const path = el('config_file').value.trim();
   el('key_list').innerHTML = '';
+  el('kentik_status').textContent = '';
   el('run_apply').disabled = true;
   currentPlan = null;
   loadConfig(path);
 });
 el('load_keys').addEventListener('click', loadKeys);
+el('check_kentik').addEventListener('click', checkKentik);
 el('run_plan').addEventListener('click', runPlan);
 el('run_export').addEventListener('click', runExport);
 el('run_apply').addEventListener('click', runApply);

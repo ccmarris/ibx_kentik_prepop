@@ -311,6 +311,37 @@ def get_keys():
     return response
 
 
+@app.route('/api/kentik-check', methods=['GET'])
+def kentik_check():
+    '''
+    Read-only probe of the Kentik API, so credentials can be proven before an
+    apply is attempted
+
+    Issues GET /sites and reports what came back. Nothing is written.
+
+    Returns:
+        Response: JSON with ok, sites, base_url and any error detail
+    '''
+    ini_file, error = resolve_config_file(request.args.get('config_file', ''))
+    if error:
+        return jsonify({'error': error}), 400
+
+    config = build_config(form_namespace({}), ini_file=ini_file, yaml_file=YAML_FILE)
+    problems = validate_kentik_credentials(config)
+    if problems:
+        return jsonify({'ok': False, 'error': '; '.join(problems),
+                        'base_url': config.kentik.grpc_base_url}), 200
+
+    kentik = KENTIK(config)
+    sites = kentik.get_sites()
+    ok = not kentik.last_error
+
+    return jsonify({'ok': ok,
+                    'sites': len(sites),
+                    'base_url': config.kentik.grpc_base_url,
+                    'error': kentik.error_text()})
+
+
 @app.route('/api/plan', methods=['POST'])
 def post_plan():
     '''
