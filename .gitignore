@@ -9,4 +9,5 @@ ibx_kentik.ini
 ibx_kentik_prepop_state.json
 plan*.csv
 plan*.json
+.claude/
 .DS_Store
