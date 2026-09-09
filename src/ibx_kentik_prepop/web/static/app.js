@@ -125,6 +125,7 @@ function renderPlan(plan) {
               devices);
   show('devices_card', devices.length > 0);
 
+  show('apply_card', false);
   const applyable = plan.kentik_available &&
         (plan.stats.actions.create > 0 || plan.stats.actions.update > 0);
   el('run_apply').disabled = !applyable;
@@ -313,17 +314,101 @@ async function runExport() {
   }
 }
 
+function changingEntries(plan) {
+  return (plan.sites || []).filter(function (site) {
+    return site.action === 'create' || site.action === 'update';
+  });
+}
+
+function diffHtml(site) {
+  const lines = [];
+  ['infrastructure', 'user_access', 'other'].forEach(function (bucket) {
+    ((site.added || {})[bucket] || []).forEach(function (cidr) {
+      lines.push('<li class="add">' + escapeHtml(cidr) + '  <span class="muted">' +
+                 bucket.replace('_', ' ') + '</span></li>');
+    });
+    ((site.removed || {})[bucket] || []).forEach(function (cidr) {
+      lines.push('<li class="remove">' + escapeHtml(cidr) + '  <span class="muted">' +
+                 bucket.replace('_', ' ') + '</span></li>');
+    });
+  });
+  if (!lines.length) {
+    lines.push('<li class="muted">no prefix changes</li>');
+  }
+  return '<p class="diff"><span class="site">' + escapeHtml(site.name) +
+    '</span> <span class="action">' + escapeHtml(site.action) +
+    (site.kentik_id ? ' &middot; id ' + escapeHtml(site.kentik_id) : '') +
+    ' &middot; ' + escapeHtml(site.site_type.replace('SITE_TYPE_', '')) +
+    '</span><ul>' + lines.join('') + '</ul></p>';
+}
+
+function confirmApply(plan) {
+  const entries = changingEntries(plan);
+  const creates = entries.filter(function (s) { return s.action === 'create'; }).length;
+  el('confirm_summary').textContent =
+    creates + ' site(s) will be created and ' + (entries.length - creates) +
+    ' updated in Kentik. Sites are never deleted.';
+  el('confirm_body').innerHTML = entries.map(diffHtml).join('');
+  show('confirm_modal', true);
+
+  return new Promise(function (resolve) {
+    function cleanup(answer) {
+      show('confirm_modal', false);
+      el('confirm_yes').removeEventListener('click', yes);
+      el('confirm_no').removeEventListener('click', no);
+      resolve(answer);
+    }
+    function yes() { cleanup(true); }
+    function no() { cleanup(false); }
+    el('confirm_yes').addEventListener('click', yes);
+    el('confirm_no').addEventListener('click', no);
+  });
+}
+
+function startApplyTable(plan) {
+  const rows = changingEntries(plan).map(function (site) {
+    return '<tr data-site="' + escapeHtml(site.name) + '"><td>' +
+      escapeHtml(site.name) + '</td><td>' + escapeHtml(site.action) +
+      '</td><td class="status"><span class="chip pending">pending</span></td>' +
+      '<td class="detail"></td></tr>';
+  }).join('');
+  el('apply_table').innerHTML =
+    '<thead><tr><th>site</th><th>action</th><th>result</th><th>detail</th></tr>' +
+    '</thead><tbody>' + rows + '</tbody>';
+  el('apply_note').textContent = '';
+  show('apply_card', true);
+}
+
+function applyEvent(event) {
+  if (event.type === 'site') {
+    const row = el('apply_table').querySelector('tr[data-site="' +
+      (window.CSS && CSS.escape ? CSS.escape(event.site) : event.site) + '"]');
+    if (!row) { return; }
+    row.querySelector('.status').innerHTML =
+      '<span class="chip ' + escapeHtml(event.status) + '">' +
+      escapeHtml(event.status) + '</span>';
+    row.querySelector('.detail').textContent = event.error ||
+      (event.kentik_id ? 'id ' + event.kentik_id : '');
+  } else if (event.type === 'note') {
+    el('apply_note').textContent = event.message;
+  } else if (event.type === 'error') {
+    setStatus(event.message, true);
+  }
+}
+
 async function runApply() {
   if (!currentPlan) { return; }
-  const summary = currentPlan.stats.actions.create + ' site(s) will be created and ' +
-        currentPlan.stats.actions.update + ' updated in Kentik. Continue?';
-  if (!window.confirm(summary)) { return; }
+  const approved = await confirmApply(currentPlan);
+  if (!approved) {
+    setStatus('Apply cancelled. Nothing was written.', false);
+    return;
+  }
 
   const body = formBody();
   body.confirm = true;
+  body.fingerprint = currentPlan.fingerprint;
   el('run_apply').disabled = true;
-  el('log').textContent = '';
-  show('log_card', true);
+  startApplyTable(currentPlan);
   setStatus('Applying...', false);
 
   try {
@@ -334,13 +419,16 @@ async function runApply() {
     });
     if (!response.ok) {
       const data = await response.json();
+      show('apply_card', false);
       setStatus(data.error || 'Apply failed', true);
+      if (response.status === 409) { currentPlan = null; }
       return;
     }
+
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
-    let exitCode = null;
+    let summary = null;
 
     while (true) {
       const chunk = await reader.read();
@@ -349,25 +437,35 @@ async function runApply() {
       const parts = buffer.split('\n\n');
       buffer = parts.pop();
       parts.forEach(function (part) {
-        const line = part.replace(/^data: ?/, '');
-        const match = line.match(/^\[EXIT:(-?\d+)\]$/);
-        if (match) {
-          exitCode = parseInt(match[1], 10);
+        const line = part.replace(/^data: ?/, '').trim();
+        if (!line) { return; }
+        let event;
+        try {
+          event = JSON.parse(line);
+        } catch (error) {
+          return;
+        }
+        if (event.type === 'done') {
+          summary = event;
         } else {
-          el('log').textContent += line + '\n';
-          el('log').scrollTop = el('log').scrollHeight;
+          applyEvent(event);
         }
       });
     }
-    if (exitCode === 0) {
-      setStatus('Apply finished successfully. Re-run the dry run to confirm the new state.', false);
+
+    if (summary) {
+      const message = summary.created + ' created, ' + summary.updated +
+        ' updated, ' + summary.unchanged + ' unchanged, ' + summary.failed +
+        ' failed.';
+      setStatus(summary.failed ? 'Apply finished with errors: ' + message
+                               : 'Apply finished: ' + message,
+                summary.failed > 0);
     } else {
-      setStatus('Apply exited with code ' + exitCode + '. Check the log.', true);
+      setStatus('Apply ended without a summary - check the results table.', true);
     }
+    currentPlan = null;
   } catch (error) {
     setStatus('Apply failed: ' + error, true);
-  } finally {
-    el('run_apply').disabled = false;
   }
 }
 

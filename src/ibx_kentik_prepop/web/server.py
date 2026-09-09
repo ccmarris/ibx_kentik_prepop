@@ -50,18 +50,18 @@ __license__ = 'BSD'
 import argparse
 import json
 import logging
-import os
-import subprocess
-import sys
+import queue
+import threading
 from argparse import Namespace
 from pathlib import Path
 from flask import Flask, Response, jsonify, request, send_from_directory, stream_with_context
 from ibx_kentik_prepop import export, report
+from ibx_kentik_prepop.apply import apply_plan
 from ibx_kentik_prepop.config import (DEFAULT_INI_FILE, INI_SECTIONS,
                                       build_config, read_ini,
                                       validate_kentik_credentials,
                                       validate_source_credentials)
-from ibx_kentik_prepop.plan import build_plan, get_source
+from ibx_kentik_prepop.plan import build_plan, get_source, plan_fingerprint
 from ibx_kentik_prepop.targets.kentik import KENTIK
 
 logger = logging.getLogger(__name__)
@@ -69,7 +69,9 @@ logger = logging.getLogger(__name__)
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parents[2]
-CLI_SCRIPT = PROJECT_ROOT / 'ibx_kentik_prepop.py'
+
+# How long a streamed apply may run before the generator gives up waiting
+APPLY_TIMEOUT_SECONDS = 900
 
 # Resolved at startup from the command line
 CONFIG_FILE = DEFAULT_INI_FILE
@@ -210,32 +212,6 @@ def form_namespace(body: dict) -> Namespace:
     return Namespace(**fields)
 
 
-def cli_command(body: dict, config_file: str = '', extra: list = None) -> list:
-    '''
-    Build the CLI command line matching a posted form
-
-    Parameters:
-        body (dict): request JSON
-        config_file (str): resolved credentials ini file
-        extra (list): additional arguments to append
-
-    Returns:
-        list: argv list for subprocess
-    '''
-    command = [sys.executable, str(CLI_SCRIPT), '-c', config_file or CONFIG_FILE]
-    if YAML_FILE:
-        command.extend(['-y', YAML_FILE])
-    for field, option in VALUE_FIELDS.items():
-        value = body.get(field)
-        if value not in (None, ''):
-            command.extend([option, str(value)])
-    for field, option in FLAG_FIELDS.items():
-        if body.get(field):
-            command.append(option)
-    command.extend(extra or [])
-    return command
-
-
 @app.route('/')
 def index():
     '''
@@ -362,6 +338,7 @@ def post_plan():
     plan = build_plan(config, kentik)
     payload = plan.as_dict()
     payload['ini_file'] = ini_file
+    payload['fingerprint'] = plan_fingerprint(plan)
     payload['kentik_available'] = kentik is not None
     payload['kentik_problems'] = kentik_problems
     payload['table'] = report.render_table(plan)
@@ -416,45 +393,101 @@ def post_export():
 @app.route('/api/apply', methods=['POST'])
 def post_apply():
     '''
-    Stream an apply run as Server-Sent Events
+    Apply the plan to Kentik in-process, streaming a result per site
 
-    The request must carry confirm: true. The final event is always
-    data: [EXIT:<returncode>]
+    The request must carry confirm: true and the fingerprint of the dry run the
+    operator reviewed. The plan is rebuilt here and refused if its fingerprint
+    no longer matches, so what gets written is always what was on screen.
+
+    Events are SSE frames holding one JSON object each, with a type of start,
+    site, note, error or done.
 
     Returns:
-        Response: text/event-stream
+        Response: text/event-stream, or a JSON error
     '''
     body = request.get_json(silent=True) or {}
 
     if not body.get('confirm'):
         return jsonify({'error': 'confirm must be true to apply the plan'}), 400
 
+    expected = str(body.get('fingerprint') or '')
+    if not expected:
+        return jsonify({'error': 'Run a dry run first - the apply needs the '
+                                 'fingerprint of the plan you reviewed'}), 400
+
     ini_file, error = resolve_config_file(body.get('config_file', ''))
     if error:
         return jsonify({'error': error}), 400
 
-    command = cli_command(body, ini_file, ['--go'])
-    logger.info('Apply requested: %s', ' '.join(command))
+    config = build_config(form_namespace(body), ini_file=ini_file, yaml_file=YAML_FILE)
+
+    problems = validate_source_credentials(config) + validate_kentik_credentials(config)
+    if problems:
+        return jsonify({'error': '; '.join(problems)}), 400
+
+    kentik = KENTIK(config)
+    plan = build_plan(config, kentik)
+    fingerprint = plan_fingerprint(plan)
+
+    if fingerprint != expected:
+        logger.warning('Refusing apply: plan fingerprint %s does not match the '
+                       'reviewed %s', fingerprint, expected)
+        return jsonify({'error': 'The plan changed since your dry run, so it '
+                                 'was not applied. Run the dry run again and '
+                                 'review the new diff.',
+                        'fingerprint': fingerprint,
+                        'expected': expected}), 409
+
+    logger.info('Applying plan %s from the web interface', fingerprint)
 
     def generate():
         '''
-        Yield SSE events from the CLI subprocess
+        Run the apply on a worker thread and stream its events as they arrive
         '''
-        yield f"data: $ {' '.join(command)}\n\n"
-        process = subprocess.Popen(command, cwd=str(PROJECT_ROOT),
-                                   stdout=subprocess.PIPE,
-                                   stderr=subprocess.STDOUT,
-                                   text=True, bufsize=1,
-                                   env=dict(os.environ))
-        for line in process.stdout:
-            yield f"data: {line.rstrip()}\n\n"
-        process.wait()
-        yield f'data: [EXIT:{process.returncode}]\n\n'
+        events = queue.Queue()
+
+        def run():
+            try:
+                apply_plan(config, plan, kentik, on_event=events.put)
+            except Exception as exc:
+                logger.exception('Apply failed')
+                events.put({'type': 'error', 'message': str(exc)})
+            finally:
+                events.put(None)
+
+        worker = threading.Thread(target=run, daemon=True)
+        worker.start()
+
+        while True:
+            try:
+                event = events.get(timeout=APPLY_TIMEOUT_SECONDS)
+            except queue.Empty:
+                yield _frame({'type': 'error',
+                              'message': f'Apply produced no progress for '
+                                         f'{APPLY_TIMEOUT_SECONDS}s, giving up '
+                                         f'on the stream'})
+                break
+            if event is None:
+                break
+            yield _frame(event)
 
     return Response(stream_with_context(generate()),
                     mimetype='text/event-stream',
                     headers={'Cache-Control': 'no-cache',
                              'X-Accel-Buffering': 'no'})
+
+
+def _frame(event: dict) -> str:
+    '''
+    Render one event as an SSE frame
+
+    Parameters:
+        event (dict): event payload
+
+    Returns:
+        str: SSE frame text
+    '''
+    return f'data: {json.dumps(event)}\n\n'
 
 
 def parseargs():

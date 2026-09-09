@@ -47,6 +47,8 @@ __author__ = 'Chris Marrison'
 __author_email__ = 'chris@infoblox.com'
 __license__ = 'BSD'
 
+import hashlib
+import json
 import logging
 from datetime import datetime, timezone
 from ibx_kentik_prepop.model import (ACTION_CREATE, ACTION_NO_CHANGE,
@@ -59,6 +61,33 @@ from ibx_kentik_prepop.sources.uddi_uai import UAI
 from ibx_kentik_prepop.summarise import build_sites, site_match_key
 
 logger = logging.getLogger(__name__)
+
+
+def plan_fingerprint(plan) -> str:
+    '''
+    Fingerprint the changes a plan would make
+
+    Used to prove that the plan being applied is the same one the operator
+    reviewed. It covers the site name, action, target id and the final network
+    lists - not the timestamp - so an unrelated re-run produces the same value
+    while any change to the outcome produces a different one.
+
+    Parameters:
+        plan (Plan): the plan to fingerprint
+
+    Returns:
+        str: short hex digest
+    '''
+    payload = []
+    for entry in sorted(plan.entries, key=lambda e: e.site.name.casefold()):
+        payload.append({
+            'site': entry.site.name,
+            'action': entry.action,
+            'kentik_id': entry.kentik_id,
+            'networks': {c: sorted(v) for c, v in sorted((entry.merged or {}).items())},
+        })
+    digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode('utf-8'))
+    return digest.hexdigest()[:16]
 
 
 def get_source(config):

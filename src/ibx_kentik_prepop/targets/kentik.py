@@ -135,6 +135,8 @@ class KENTIK:
         })
         self.session.verify = self.kentik.verify_ssl
         self.timeout = self.kentik.timeout_seconds
+        # Detail of the most recent failed request, for reporting to the caller
+        self.last_error = {}
         logger.debug('Kentik target initialised (sites via %s, devices via %s)',
                      self.kentik.grpc_base_url, self.kentik.base_url)
         return
@@ -142,6 +144,9 @@ class KENTIK:
     def _request(self, method: str, url: str, body: dict = None) -> dict:
         '''
         Issue a request and return the parsed JSON body
+
+        On failure the status code and response body are kept in last_error so
+        the caller can report what Kentik actually said rather than just None.
 
         Parameters:
             method (str): HTTP method
@@ -152,17 +157,36 @@ class KENTIK:
             dict: parsed response, or None on failure
         '''
         result = None
+        self.last_error = {}
         logger.debug('%s %s', method, url)
         try:
             response = self.session.request(method, url, json=body, timeout=self.timeout)
             response.raise_for_status()
             result = response.json() if response.content else {}
         except requests.RequestException as exc:
+            status = 0
             detail = ''
             if getattr(exc, 'response', None) is not None:
+                status = exc.response.status_code
                 detail = exc.response.text[:500]
+            self.last_error = {'method': method, 'url': url, 'status': status,
+                               'message': str(exc), 'body': detail}
             logger.error('Kentik %s %s failed: %s %s', method, url, exc, detail)
         return result
+
+    def error_text(self) -> str:
+        '''
+        One-line description of the most recent failure
+
+        Returns:
+            str: human readable error, empty string when the last call worked
+        '''
+        text = ''
+        if self.last_error:
+            status = self.last_error.get('status') or 'no response'
+            body = (self.last_error.get('body') or '').strip().replace('\n', ' ')
+            text = f"{status}: {body}" if body else f"{status}: {self.last_error.get('message', '')}"
+        return text[:300]
 
     def get_sites(self) -> list:
         '''

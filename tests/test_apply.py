@@ -15,6 +15,10 @@ class RecordingKentik:
     def __init__(self):
         self.creates = []
         self.updates = []
+        self.last_error = {}
+
+    def error_text(self):
+        return '400: site title already in use' if self.last_error else ''
 
     def create_site(self, site, networks):
         self.creates.append((site.name, networks))
@@ -76,12 +80,49 @@ def test_apply_records_state_and_the_device_note(tmp_path):
     assert state['runs'][-1]['created'] == 1
 
 
+def test_apply_emits_progress_events(tmp_path):
+    config = replace(make_config(), state_file=str(tmp_path / 'state.json'))
+    plan = make_plan()
+    plan.devices = [Device(name='rtr1')]
+    events = []
+
+    apply_plan(config, plan, RecordingKentik(), on_event=events.append)
+    kinds = [e['type'] for e in events]
+    sites = {e['site']: e['status'] for e in events if e['type'] == 'site'}
+
+    assert kinds[0] == 'start'
+    assert kinds[-1] == 'done'
+    assert 'note' in kinds
+    assert sites == {'NEW-SITE': 'created', 'OLD-SITE': 'updated',
+                     'SAME-SITE': 'unchanged'}
+    assert events[0]['to_change'] == 2
+    assert events[-1]['created'] == 1
+
+
+def test_apply_events_carry_the_failure_reason(tmp_path):
+    class FailingKentik(RecordingKentik):
+        def update_site(self, site_id, site, networks, raw_site=None):
+            self.last_error = {'status': 403}
+            return None
+
+    config = replace(make_config(), state_file=str(tmp_path / 'state.json'))
+    events = []
+    apply_plan(config, make_plan(), FailingKentik(), on_event=events.append)
+    failed = [e for e in events if e.get('status') == 'failed']
+
+    assert failed[0]['site'] == 'OLD-SITE'
+    assert 'already in use' in failed[0]['error']
+    assert events[-1]['failed'] == 1
+
+
 def test_apply_reports_failures(tmp_path):
     class FailingKentik(RecordingKentik):
         def create_site(self, site, networks):
+            self.last_error = {'status': 400}
             return None
 
     config = replace(make_config(), state_file=str(tmp_path / 'state.json'))
     results = apply_plan(config, make_plan(), FailingKentik())
 
     assert results['failed'] == ['NEW-SITE']
+    assert results['errors']['NEW-SITE'] == '400: site title already in use'

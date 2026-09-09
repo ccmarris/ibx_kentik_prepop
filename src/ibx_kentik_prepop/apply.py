@@ -104,7 +104,7 @@ def save_state(path: str, state: dict) -> bool:
     return written
 
 
-def apply_plan(config, plan, kentik) -> dict:
+def apply_plan(config, plan, kentik, on_event=None) -> dict:
     '''
     Create and update Kentik sites according to the plan
 
@@ -115,14 +115,28 @@ def apply_plan(config, plan, kentik) -> dict:
         config (ProjectConfig): assembled configuration
         plan (Plan): the plan to apply
         kentik (KENTIK): initialised Kentik target
+        on_event (callable): optional callback taking one event dict, called as
+            each site is processed so a caller can report progress live
 
     Returns:
         dict: results with created, updated, unchanged, failed and notes
     '''
     results = {'created': [], 'updated': [], 'unchanged': [], 'failed': [],
-               'notes': []}
+               'notes': [], 'errors': {}}
+
+    def emit(event: dict) -> None:
+        '''
+        Hand an event to the caller's callback, if it supplied one
+        '''
+        if on_event is not None:
+            on_event(event)
+        return
     state = load_state(config.state_file)
     now = datetime.now(timezone.utc).isoformat(timespec='seconds')
+
+    total = sum(1 for e in plan.entries if e.action != ACTION_NO_CHANGE)
+    emit({'type': 'start', 'sites': len(plan.entries), 'to_change': total,
+          'stats': plan.stats()})
 
     for entry in plan.entries:
         name = entry.site.name
@@ -132,12 +146,18 @@ def apply_plan(config, plan, kentik) -> dict:
         if entry.action == ACTION_NO_CHANGE:
             results['unchanged'].append(name)
             logger.info('Site %s is already up to date', name)
+            emit({'type': 'site', 'site': name, 'action': entry.action,
+                  'status': 'unchanged', 'kentik_id': entry.kentik_id})
             continue
 
         if entry.action == ACTION_CREATE:
             created = kentik.create_site(entry.site, networks)
             if created is None:
+                error = kentik.error_text()
                 results['failed'].append(name)
+                results['errors'][name] = error
+                emit({'type': 'site', 'site': name, 'action': entry.action,
+                      'status': 'failed', 'error': error})
             else:
                 site_id = str(created.get('id', ''))
                 results['created'].append(name)
@@ -145,11 +165,18 @@ def apply_plan(config, plan, kentik) -> dict:
                                         'applied': now,
                                         'site_key': plan.site_key,
                                         'source': plan.source}
+                emit({'type': 'site', 'site': name, 'action': entry.action,
+                      'status': 'created', 'kentik_id': site_id,
+                      'added': entry.added})
         elif entry.action == ACTION_UPDATE:
             updated = kentik.update_site(entry.kentik_id, entry.site, networks,
                                          entry.raw_site)
             if updated is None:
+                error = kentik.error_text()
                 results['failed'].append(name)
+                results['errors'][name] = error
+                emit({'type': 'site', 'site': name, 'action': entry.action,
+                      'status': 'failed', 'error': error})
             else:
                 results['updated'].append(name)
                 record = state['sites'].get(name, {})
@@ -157,11 +184,16 @@ def apply_plan(config, plan, kentik) -> dict:
                                'applied': now, 'site_key': plan.site_key,
                                'source': plan.source})
                 state['sites'][name] = record
+                emit({'type': 'site', 'site': name, 'action': entry.action,
+                      'status': 'updated', 'kentik_id': entry.kentik_id,
+                      'added': entry.added, 'removed': entry.removed})
 
     if plan.devices:
         results['notes'].append(DEVICE_WRITE_REFUSED)
         logger.warning('%d device candidate(s) reported but not created. %s',
                        len(plan.devices), DEVICE_WRITE_REFUSED)
+        emit({'type': 'note', 'message': DEVICE_WRITE_REFUSED,
+              'devices': len(plan.devices)})
 
     state['runs'].append({
         'applied': now,
@@ -178,4 +210,10 @@ def apply_plan(config, plan, kentik) -> dict:
     logger.info('Apply complete: %d created, %d updated, %d unchanged, %d failed',
                 len(results['created']), len(results['updated']),
                 len(results['unchanged']), len(results['failed']))
+    emit({'type': 'done',
+          'created': len(results['created']),
+          'updated': len(results['updated']),
+          'unchanged': len(results['unchanged']),
+          'failed': len(results['failed']),
+          'errors': results['errors']})
     return results

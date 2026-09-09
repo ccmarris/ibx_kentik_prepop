@@ -4,6 +4,7 @@
 Tests for the web interface, in particular the credentials ini override
 '''
 
+import json
 import pytest
 from ibx_kentik_prepop.web import server
 
@@ -148,10 +149,107 @@ def test_export_endpoint_returns_named_artefacts(client, monkeypatch):
     assert payload['stats']['sites'] == 1
 
 
+def _plan_with(entries):
+    from ibx_kentik_prepop.model import Plan
+    plan = Plan(source='uddi', site_key='Site')
+    plan.entries = entries
+    return plan
+
+
+def _one_site_plan():
+    from ibx_kentik_prepop.model import ACTION_CREATE, SitePlan
+    from conftest import make_site
+    return _plan_with([SitePlan(site=make_site('LON-DC1', ('10.1.0.0/24',)),
+                                action=ACTION_CREATE,
+                                added={'user_access': ['10.1.0.0/24']},
+                                merged={'user_access': ['10.1.0.0/24']})])
+
+
 def test_apply_still_requires_confirmation(client):
     response = client.post('/api/apply', json={'site_key': 'Site'})
     assert response.status_code == 400
     assert 'confirm' in response.get_json()['error']
+
+
+def test_apply_requires_the_reviewed_fingerprint(client):
+    response = client.post('/api/apply', json={'confirm': True, 'site_key': 'Site'})
+    assert response.status_code == 400
+    assert 'dry run' in response.get_json()['error']
+
+
+def test_apply_refuses_a_stale_fingerprint(client, monkeypatch):
+    from ibx_kentik_prepop.web import server as web
+
+    monkeypatch.setattr(web, 'build_plan', lambda config, kentik: _one_site_plan())
+    monkeypatch.setattr(web, 'KENTIK', lambda config: object())
+
+    response = client.post('/api/apply', json={'confirm': True,
+                                               'source': 'uddi',
+                                               'site_key': 'Site',
+                                               'fingerprint': 'stale0000000000'})
+    payload = response.get_json()
+
+    assert response.status_code == 409
+    assert 'changed since your dry run' in payload['error']
+    assert payload['fingerprint'] != payload['expected']
+
+
+def test_apply_streams_one_event_per_site(client, monkeypatch):
+    from ibx_kentik_prepop.plan import plan_fingerprint
+    from ibx_kentik_prepop.web import server as web
+
+    plan = _one_site_plan()
+    applied = {}
+
+    def fake_apply(config, applied_plan, kentik, on_event=None):
+        applied['plan'] = applied_plan
+        on_event({'type': 'start', 'sites': 1, 'to_change': 1, 'stats': {}})
+        on_event({'type': 'site', 'site': 'LON-DC1', 'action': 'create',
+                  'status': 'created', 'kentik_id': '101'})
+        on_event({'type': 'done', 'created': 1, 'updated': 0, 'unchanged': 0,
+                  'failed': 0, 'errors': {}})
+        return {'created': ['LON-DC1'], 'updated': [], 'unchanged': [],
+                'failed': [], 'notes': [], 'errors': {}}
+
+    monkeypatch.setattr(web, 'build_plan', lambda config, kentik: plan)
+    monkeypatch.setattr(web, 'KENTIK', lambda config: object())
+    monkeypatch.setattr(web, 'apply_plan', fake_apply)
+
+    response = client.post('/api/apply', json={'confirm': True,
+                                               'source': 'uddi',
+                                               'site_key': 'Site',
+                                               'fingerprint': plan_fingerprint(plan)})
+    frames = [line for line in response.get_data(as_text=True).split('\n\n') if line]
+    events = [json.loads(f.replace('data: ', '')) for f in frames]
+
+    assert response.status_code == 200
+    assert response.mimetype == 'text/event-stream'
+    assert [e['type'] for e in events] == ['start', 'site', 'done']
+    assert events[1]['status'] == 'created'
+    assert applied['plan'] is plan
+
+
+def test_apply_reports_a_worker_exception_as_an_event(client, monkeypatch):
+    from ibx_kentik_prepop.plan import plan_fingerprint
+    from ibx_kentik_prepop.web import server as web
+
+    plan = _one_site_plan()
+
+    def exploding_apply(config, applied_plan, kentik, on_event=None):
+        raise RuntimeError('connection reset')
+
+    monkeypatch.setattr(web, 'build_plan', lambda config, kentik: plan)
+    monkeypatch.setattr(web, 'KENTIK', lambda config: object())
+    monkeypatch.setattr(web, 'apply_plan', exploding_apply)
+
+    response = client.post('/api/apply', json={'confirm': True,
+                                               'source': 'uddi',
+                                               'site_key': 'Site',
+                                               'fingerprint': plan_fingerprint(plan)})
+    text = response.get_data(as_text=True)
+
+    assert '"type": "error"' in text
+    assert 'connection reset' in text
 
 
 def test_apply_rejects_a_bad_override_before_running(client):
@@ -159,15 +257,3 @@ def test_apply_rejects_a_bad_override_before_running(client):
                                                'site_key': 'Site',
                                                'config_file': '/nope.ini'})
     assert response.status_code == 400
-
-
-def test_cli_command_uses_the_resolved_ini(client, tmp_path):
-    command = server.cli_command({'source': 'uddi', 'site_key': 'Site',
-                                  'devices': True},
-                                 str(tmp_path / 'tenant-b.ini'), ['--go'])
-
-    assert '-c' in command
-    assert command[command.index('-c') + 1] == str(tmp_path / 'tenant-b.ini')
-    assert '--site-key' in command and 'Site' in command
-    assert '--devices' in command
-    assert command[-1] == '--go'

@@ -227,9 +227,27 @@ Review the payloads, then create the devices in Kentik.
 
 Then open <http://127.0.0.1:5000>. The UI drives the same code: pick the
 credentials file, source and site key (both have pickers showing what is
-available), run a dry run, read the warnings, and apply — the apply run is
-streamed live as Server-Sent Events. **Build export** produces the same
-artefacts as `--export-kentik` with a download button per file.
+available), run a dry run, read the warnings, and apply. **Build export**
+produces the same artefacts as `--export-kentik` with a download button per
+file.
+
+### Applying from the UI
+
+The apply calls the Kentik API in-process and streams one result per site, so
+the table fills in as sites are written and a failure shows the status code and
+error body Kentik returned next to the site that failed. Two things gate it:
+
+- **You confirm the actual diff.** The confirmation lists every changing site
+  with the prefixes being added (`+`) and removed (`−`) per classification
+  bucket — not just a count.
+- **You can only apply what you reviewed.** The dry run returns a fingerprint
+  of its outcome. The apply rebuilds the plan server-side and refuses with a
+  409 if the fingerprint no longer matches, so an edited form or changed IPAM
+  data can never be written under a diff you approved for something else. Run
+  the dry run again and review the new diff.
+
+Sites are never deleted, and device creation is still refused (see
+[Devices](#devices)).
 
 ### Switching credentials from the UI
 

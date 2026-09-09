@@ -150,3 +150,24 @@ def test_build_plan_filters_device_roles(monkeypatch):
 
     plan = build_plan(config, kentik=None)
     assert [d.name for d in plan.devices] == ['rtr1']
+
+
+def test_fingerprint_covers_the_outcome_not_the_timestamp():
+    from ibx_kentik_prepop.plan import plan_fingerprint
+    from ibx_kentik_prepop.model import SitePlan
+    from conftest import make_site
+
+    def plan_for(networks, action=ACTION_CREATE):
+        plan = Plan(source='uddi', site_key='Site', generated='then')
+        plan.entries = [SitePlan(site=make_site('LON-DC1'), action=action,
+                                 merged={'user_access': networks})]
+        return plan
+
+    baseline = plan_fingerprint(plan_for(['10.1.0.0/24']))
+    later = plan_for(['10.1.0.0/24'])
+    later.generated = 'now'
+
+    assert plan_fingerprint(later) == baseline
+    assert plan_fingerprint(plan_for(['10.1.0.0/24', '10.2.0.0/24'])) != baseline
+    assert plan_fingerprint(plan_for(['10.1.0.0/24'],
+                                     action=ACTION_UPDATE)) != baseline

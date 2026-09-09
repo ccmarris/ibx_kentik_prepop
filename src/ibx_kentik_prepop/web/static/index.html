@@ -94,6 +94,28 @@ pre.log {
 .status.error { border-left-color: #B4231E; }
 .muted { color: var(--ibx-text-muted); }
 .hidden { display: none; }
+.modal {
+  position: fixed; inset: 0; background: rgba(16, 24, 32, 0.75);
+  display: flex; align-items: center; justify-content: center; padding: 24px; z-index: 10;
+}
+.modal-card {
+  background: var(--ibx-white); border: 1px solid var(--ibx-steel);
+  border-left: 4px solid var(--ibx-green); max-width: 760px; width: 100%;
+  max-height: 80vh; display: flex; flex-direction: column; padding: 24px;
+}
+.modal-card h2 { margin-bottom: 4px; }
+.modal-body { overflow: auto; margin: 12px 0 18px; }
+.diff { font-size: 13px; margin: 0 0 14px; }
+.diff .site { font-weight: 700; }
+.diff .action { font-size: 11px; text-transform: uppercase; letter-spacing: 0.6px; color: var(--ibx-text-muted); }
+.diff ul { list-style: none; margin: 4px 0 0; padding: 0; }
+.diff li { font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
+.diff li.add::before { content: '+ '; color: var(--ibx-green); font-weight: 700; }
+.diff li.remove::before { content: '\2212  '; color: var(--ibx-text-muted); font-weight: 700; }
+.chip { font-weight: 700; font-size: 11px; text-transform: uppercase; letter-spacing: 0.6px; }
+.chip.created, .chip.updated { color: var(--ibx-green); }
+.chip.unchanged, .chip.pending { color: var(--ibx-text-muted); }
+.chip.failed { color: #B4231E; }
 a { color: var(--ibx-green); text-decoration: underline; }
 @media (max-width: 980px) { main { grid-template-columns: 1fr; } }
 </style>
@@ -214,12 +236,24 @@ a { color: var(--ibx-green); text-decoration: underline; }
       <p class="hint">Kentik has no site CSV import, so the site JSON holds ready-to-send Site API v202211 request bodies. Create the sites before the devices: a device needs its <code>site_id</code>, which is only filled in for sites that already exist in Kentik.</p>
     </div>
 
-    <div class="card hidden" id="log_card">
-      <h2>Apply log</h2>
-      <pre class="log" id="log"></pre>
+    <div class="card hidden" id="apply_card">
+      <h2>Apply results</h2>
+      <table id="apply_table"></table>
+      <p class="hint" id="apply_note"></p>
     </div>
   </section>
 </main>
+<div class="modal hidden" id="confirm_modal">
+  <div class="modal-card">
+    <h2>Confirm apply</h2>
+    <p class="sub" id="confirm_summary"></p>
+    <div class="modal-body" id="confirm_body"></div>
+    <div class="actions">
+      <button class="primary" id="confirm_yes">Apply to Kentik</button>
+      <button class="secondary" id="confirm_no">Cancel</button>
+    </div>
+  </div>
+</div>
 <script src="/static/app.js"></script>
 </body>
 </html>
