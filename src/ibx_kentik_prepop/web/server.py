@@ -98,7 +98,8 @@ FLAG_FIELDS = ('include_address_blocks', 'devices',
 # String/int form fields, mapped to their CLI option
 VALUE_FIELDS = ('task', 'source', 'site_key', 'class_key', 'site_type_key',
                 'network_view', 'ip_space', 'site_filter', 'max_prefix_len',
-                'device_mode', 'sending_ips', 'plan_name', 'plan_id',
+                'device_mode', 'sending_ips', 'sample_rate', 'plan_name',
+                'plan_id',
                 'agent_id', 'credential_name', 'monitoring_template_id',
                 'bgp_type', 'bgp_neighbor_asn', 'bgp_neighbor_ip',
                 'bgp_neighbor_ip6', 'bgp_device_id')
@@ -201,7 +202,8 @@ def form_namespace(body: dict) -> Namespace:
     for field in FLAG_FIELDS:
         fields[field] = bool(body.get(field))
     fields['gm'] = body.get('gm') or None
-    for numeric in ('max_prefix_len', 'plan_id', 'monitoring_template_id'):
+    for numeric in ('max_prefix_len', 'plan_id', 'monitoring_template_id',
+                    'sample_rate'):
         if fields.get(numeric):
             fields[numeric] = int(fields[numeric])
     fields['exclude_device'] = [str(v) for v in (body.get('exclude_device') or [])]

@@ -111,6 +111,8 @@ def parseargs():
     parser.add_argument('--sending-ips', choices=['mgmt', 'all'], default=None,
                         help='flow exporter source addresses: the management IP '
                              '(default) or every discovered interface address')
+    parser.add_argument('--sample-rate', type=int, default=None,
+                        help='device_sample_rate for flow devices (default: 1)')
     parser.add_argument('--plan-name', default=None,
                         help='Kentik plan to create flow devices under '
                              "(default: 'Free Flowpak Plan')")

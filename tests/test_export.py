@@ -101,7 +101,7 @@ def test_add_device_csv_matches_the_kentik_loader_columns():
     assert lon['siteid'] == '42'
     assert lon['sendingips'] == '10.1.0.1'
     assert lon['devicedescription'] == 'Cisco ISR4451'
-    assert lon['devicesamplerate'] == '1024'
+    assert lon['devicesamplerate'] == '1'
 
 
 def test_nms_device_csv_columns():

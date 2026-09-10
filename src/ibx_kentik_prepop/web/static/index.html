@@ -221,6 +221,10 @@ a { color: var(--ibx-green); text-decoration: underline; }
             <input type="number" id="plan_id" min="1" placeholder="from the plan above">
             <p class="hint"><a href="#" id="load_plans">Load plans</a> — the free plan is picked by default. Licensing is not visible to every service account; if the list comes back empty, type the plan id here.</p>
 
+            <label for="sample_rate">Sample rate</label>
+            <input type="number" id="sample_rate" min="1" value="1">
+            <p class="hint">1 means unsampled. Match the rate the device actually exports at if you know it.</p>
+
             <label for="sending_ips">Default sending IPs</label>
             <select id="sending_ips">
               <option value="mgmt">Management IP only</option>

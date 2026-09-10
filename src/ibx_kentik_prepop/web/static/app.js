@@ -3,7 +3,8 @@
 const VALUE_FIELDS = ['config_file', 'source', 'site_key', 'class_key',
                       'site_type_key', 'network_view', 'ip_space', 'site_filter',
                       'max_prefix_len', 'export_prefix', 'device_mode',
-                      'sending_ips', 'plan_id', 'agent_id', 'credential_name',
+                      'sending_ips', 'sample_rate', 'plan_id', 'agent_id',
+                      'credential_name',
                       'bgp_type', 'bgp_neighbor_asn', 'bgp_neighbor_ip',
                       'bgp_neighbor_ip6', 'bgp_device_id'];
 const FLAG_FIELDS = ['include_address_blocks', 'devices',
@@ -865,7 +866,7 @@ el('bgp_type').addEventListener('change', function () {
   invalidatePlan('BGP type changed');
 });
 ['bgp_neighbor_asn', 'bgp_neighbor_ip', 'bgp_neighbor_ip6',
- 'bgp_device_id', 'bgp_flowspec'].forEach(function (field) {
+ 'bgp_device_id', 'bgp_flowspec', 'sample_rate'].forEach(function (field) {
   el(field).addEventListener('change', function () {
     invalidatePlan('BGP settings changed');
   });

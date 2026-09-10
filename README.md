@@ -266,7 +266,7 @@ populated:
 
 | Mode | Fields |
 |---|---|
-| `flow` | `device_subtype`, `plan_id`, `sending_ips`, `device_sample_rate`, `minimize_snmp`, `device_snmp_ip` |
+| `flow` | `device_subtype`, `plan_id`, `sending_ips`, `device_sample_rate` (default **1**, unsampled — `--sample-rate` to change), `minimize_snmp`, `device_snmp_ip` |
 | `nms` | `nms{agent_id, ip_address, snmp{credential_name, port}}`, `monitoring_template_id` |
 
 **BGP.** Kentik requires `device_bgp_type` on every device create, so it is

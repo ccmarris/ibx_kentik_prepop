@@ -261,3 +261,16 @@ def test_device_payload_shares_another_devices_bgp_table():
     body = KENTIK(config).device_payload(Device(name='lon-sw-01'))['device']
 
     assert body['use_bgp_device_id'] == '500'
+
+
+def test_sample_rate_defaults_to_one_and_is_configurable():
+    from dataclasses import replace
+    from conftest import make_config as base_config
+
+    device = Device(name='lon-rtr-01', mgmt_ip='10.1.0.1', role='router')
+    assert target().device_payload(device)['device']['device_sample_rate'] == 1
+
+    config = base_config()
+    config = replace(config, device=replace(config.device, sample_rate=1000))
+    body = KENTIK(config).device_payload(device)['device']
+    assert body['device_sample_rate'] == 1000

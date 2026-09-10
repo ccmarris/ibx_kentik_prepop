@@ -152,7 +152,9 @@ DEFAULT_SITE_TYPE_MAP = {
 DEFAULT_PLAN_NAME = 'Free Flowpak Plan'
 DEFAULT_DEVICE_MODE = 'flow'
 DEFAULT_DEVICE_SUBTYPE = 'router'
-DEFAULT_SAMPLE_RATE = 1024
+# Flow sample rate reported to Kentik. 1 means unsampled - the right default
+# for pre-population, where the rate the device actually uses is not known.
+DEFAULT_SAMPLE_RATE = 1
 DEFAULT_SENDING_IPS = 'mgmt'
 DEFAULT_SNMP_PORT = 161
 
@@ -624,7 +626,8 @@ def build_config(args, ini_file: str = '', yaml_file: str = '') -> ProjectConfig
         plan_name=str(getattr(args, 'plan_name', None)
                       or device_yaml.get('plan_name', DEFAULT_PLAN_NAME)),
         plan_id=int(getattr(args, 'plan_id', None) or device_yaml.get('plan_id', 0)),
-        sample_rate=int(device_yaml.get('sample_rate', DEFAULT_SAMPLE_RATE)),
+        sample_rate=int(getattr(args, 'sample_rate', None)
+                        or device_yaml.get('sample_rate', DEFAULT_SAMPLE_RATE)),
         minimize_snmp=_as_bool(device_yaml.get('minimize_snmp'), True),
         sending_ips=sending_ips,
         sending_ip_map=dict(getattr(args, 'sending_ip_map', None) or {}),

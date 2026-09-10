@@ -78,7 +78,8 @@ device:
   # pin a specific plan.
   plan_name: Free Flowpak Plan
   plan_id: 0
-  sample_rate: 1024
+  # 1 = unsampled, which is the safe default for pre-population.
+  sample_rate: 1
   minimize_snmp: true
 
   # mgmt (default) = the management address only; all = every discovered
