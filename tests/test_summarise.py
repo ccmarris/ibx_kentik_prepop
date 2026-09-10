@@ -235,3 +235,15 @@ def test_build_sites_attaches_the_address_to_the_site():
     assert sites[0].postal['city'] == 'London'
     assert sites[0].lat == 51.5
     assert sites[0].address_source['lon'] == 'longitude'
+
+
+def test_describe_reads_object_fields_then_tags():
+    from ibx_kentik_prepop.sources.base import describe
+
+    keys = ('description', 'comment', 'notes')
+
+    assert describe({'description': 'Core switch'}, keys) == 'Core switch'
+    assert describe({'comment': 'Spare'}, keys) == 'Spare'
+    assert describe({}, keys, {'Notes': 'From an EA'}) == 'From an EA'
+    assert describe({'description': {'value': 'EA shaped'}}, keys) == 'EA shaped'
+    assert describe({}, keys) == ''

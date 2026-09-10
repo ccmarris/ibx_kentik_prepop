@@ -50,7 +50,7 @@ __license__ = 'BSD'
 import logging
 import requests
 from ibx_kentik_prepop.model import Device
-from ibx_kentik_prepop.sources.base import match_site, role_from_text
+from ibx_kentik_prepop.sources.base import describe, match_site, role_from_text
 from ibx_kentik_prepop.sources.uddi import UDDI
 
 logger = logging.getLogger(__name__)
@@ -61,7 +61,8 @@ logger = logging.getLogger(__name__)
 # and the category value covering network infrastructure on a live tenant -
 # 'compute' is the confirmed category for virtual machines.
 ASSET_FIELDS = ('name', 'ip_addresses', 'category', 'type', 'vendor', 'model',
-                'os_version', 'location', 'managed', 'providers')
+                'os_version', 'location', 'managed', 'providers',
+                'description', 'comment', 'tags')
 PAGE_SIZE = 1000
 
 
@@ -189,6 +190,8 @@ class UAI(UDDI):
                 vendor=str(asset.get('vendor', '')),
                 model=str(asset.get('model', '')),
                 os_version=str(asset.get('os_version', '')),
+                description=describe(asset, self.config.device.description_keys,
+                                     asset.get('tags')),
                 interfaces=[{'name': '', 'address': a, 'description': '',
                              'speed': '', 'type': ''} for a in addresses],
                 origin='uai',

@@ -243,6 +243,40 @@ def match_site(device, subnets: list, location: str = '') -> tuple:
     return site, rule
 
 
+def describe(obj: dict, candidates, metadata: dict = None) -> str:
+    """
+    Find a human description for a device
+
+    Looks at the object's own fields first, then at its EA/tag dictionary, in
+    the order the candidate names are given.
+
+    Parameters:
+        obj (dict): the raw source object
+        candidates: field/EA/tag names to try, in order of preference
+        metadata (dict): the object's EA or tag dictionary, when it has one
+
+    Returns:
+        str: the description, empty string when nothing was found
+    """
+    from ibx_kentik_prepop.summarise import tag_value
+
+    description = ''
+    for candidate in candidates or ():
+        value = obj.get(candidate) if isinstance(obj, dict) else None
+        if isinstance(value, dict):
+            value = value.get('value', '')
+        if isinstance(value, list):
+            value = ', '.join(str(v) for v in value if v)
+        if value not in (None, ''):
+            description = str(value).strip()
+            break
+
+    if not description and metadata:
+        description = tag_value(metadata, candidates)[0]
+
+    return description
+
+
 def count_keys(records: list, key_field: str) -> dict:
     '''
     Count how many records carry each key in a metadata dict field

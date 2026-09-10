@@ -62,8 +62,8 @@ SITE_HEADERS = ('site', 'action', 'type', 'infra', 'user_access', 'other',
                 'geo', 'address', 'devices')
 SUBNET_HEADERS = ('site', 'cidr', 'classification', 'source_cidrs', 'comment')
 DEVICE_HEADERS = ('name', 'kentik_name', 'action', 'role', 'mgmt_ip', 'ifaces',
-                  'sending_ips', 'site', 'site_match', 'vendor', 'model',
-                  'origin', 'detail')
+                  'sending_ips', 'site', 'site_match', 'description', 'origin',
+                  'detail')
 WARNING_HEADERS = ('category', 'message', 'detail')
 
 DEVICE_FOOTER = (
@@ -149,6 +149,7 @@ def device_rows(plan) -> list:
         list: list of row dicts
     '''
     from ibx_kentik_prepop.summarise import sanitise_device_name
+    from ibx_kentik_prepop.targets.kentik import device_description
 
     def row(device, action='', kentik_id='', excluded=False, reason='',
             mismatch=None):
@@ -168,8 +169,7 @@ def device_rows(plan) -> list:
             'sending_ips': ' '.join(device.sending_ips or ()),
             'site': device.site_name,
             'site_match': device.site_match,
-            'vendor': device.vendor,
-            'model': device.model,
+            'description': device_description(device),
             'origin': device.origin,
             'detail': detail,
         }

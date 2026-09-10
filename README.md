@@ -254,6 +254,16 @@ and can be chosen per device from the interface list in the UI. This matters:
 for a flow device the sending IP must be the **flow exporter source address**, or
 the device sits idle.
 
+**Descriptions.** The Kentik `device_description` leads with whatever the source
+data says about the device — a `description` or `comment` field on the
+discovered device or asset, or an EA/tag named `description`, `comment`,
+`comments`, `notes`, `purpose` or `role` (configurable as
+`device.description_keys`). The discovered vendor, model and version are
+appended, so `Site edge router, WAN uplink - Cisco ISR4451 17.6`. With no
+source text it is just the hardware summary, and gateway-inferred routers get
+`Default gateway for 10.1.0.0/25 - <subnet comment>`. Descriptions are capped at
+255 characters (Kentik does not document a limit — flagged in the code).
+
 **Site matching.** A device is placed by, in order: its own location attribute
 when that names a site we derived, then the most specific subnet containing any
 of its **interface** addresses, then its management address. The report's

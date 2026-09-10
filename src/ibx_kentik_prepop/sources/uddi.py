@@ -271,6 +271,9 @@ class UDDI(SiteSource):
                     name=gateway.replace('.', '_').replace(':', '_'),
                     mgmt_ip=gateway,
                     role=ROLE_ROUTER,
+                    description=(f"Default gateway for "
+                                 f"{record.get('cidr', '')}"
+                                 f"{' - ' + record['comment'] if record.get('comment') else ''}"),
                     site_name=record.get('site', '') or site_for_ip(gateway, subnets or []),
                     site_match='subnet',
                     interfaces=[{'name': 'gateway', 'address': gateway,

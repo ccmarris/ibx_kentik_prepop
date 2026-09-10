@@ -109,6 +109,7 @@ function renderDevicePlan(plan) {
       '<td class="keep">' + picker + '</td>' +
       '<td>' + escapeHtml(entry.site_name || '') + '</td>' +
       '<td>' + escapeHtml(entry.site_match || '') + '</td>' +
+      '<td>' + escapeHtml(entry.description || '') + '</td>' +
       '<td>' + escapeHtml(entry.origin) + '</td>' +
       '<td>' + escapeHtml(deviceDetail(entry)) + '</td></tr>';
   }).join('');
@@ -116,7 +117,8 @@ function renderDevicePlan(plan) {
   el('device_plan_table').innerHTML =
     '<thead><tr><th>use</th><th>device</th><th>kentik name</th><th>action</th>' +
     '<th>role</th><th>mgmt ip</th><th>sending ips</th><th>site</th>' +
-    '<th>matched by</th><th>origin</th><th>detail</th></tr></thead><tbody>' +
+    '<th>matched by</th><th>description</th><th>origin</th><th>detail</th>' +
+    '</tr></thead><tbody>' +
     rows + '</tbody>';
 
   el('device_plan_table').querySelectorAll('input[data-include]').forEach(function (box) {

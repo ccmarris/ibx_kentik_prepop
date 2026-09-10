@@ -162,6 +162,11 @@ DEFAULT_SNMP_PORT = 161
 # 'none' uses generic IP/ASN mapping and needs nothing else; 'device' peers with
 # the device itself and requires an ASN plus a peering address; 'other_device'
 # shares an already-peered device's routing table and requires that device's id.
+# Fields and EA/tag names a device description is taken from, in order of
+# preference. Whatever is found goes into the Kentik device_description.
+DEFAULT_DESCRIPTION_KEYS = ('description', 'comment', 'comments', 'notes',
+                            'purpose', 'device_description', 'role')
+
 DEFAULT_BGP_TYPE = 'none'
 BGP_TYPES = ('none', 'device', 'other_device')
 # device_bgp_flowspec is the boolean that sits alongside it
@@ -252,6 +257,7 @@ class DeviceConfig:
     use_uai: bool = False
     use_gateways: bool = False
     roles: tuple = ('router', 'switch', 'firewall')
+    description_keys: tuple = DEFAULT_DESCRIPTION_KEYS
     mode: str = DEFAULT_DEVICE_MODE
     subtype: str = DEFAULT_DEVICE_SUBTYPE
     plan_name: str = DEFAULT_PLAN_NAME
@@ -621,6 +627,8 @@ def build_config(args, ini_file: str = '', yaml_file: str = '') -> ProjectConfig
         use_gateways=_as_bool(getattr(args, 'use_gateways', None)
                               or device_yaml.get('use_gateways'), False),
         roles=_as_tuple(device_yaml.get('roles')) or ('router', 'switch', 'firewall'),
+        description_keys=(_as_tuple(device_yaml.get('description_keys'))
+                          or DEFAULT_DESCRIPTION_KEYS),
         mode=mode,
         subtype=str(device_yaml.get('subtype', DEFAULT_DEVICE_SUBTYPE)),
         plan_name=str(getattr(args, 'plan_name', None)

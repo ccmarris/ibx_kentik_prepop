@@ -274,3 +274,36 @@ def test_sample_rate_defaults_to_one_and_is_configurable():
     config = replace(config, device=replace(config.device, sample_rate=1000))
     body = KENTIK(config).device_payload(device)['device']
     assert body['device_sample_rate'] == 1000
+
+
+def test_description_prefers_the_source_text_and_keeps_the_hardware():
+    from ibx_kentik_prepop.targets.kentik import device_description
+
+    documented = Device(name='lon-rtr-01', vendor='Cisco', model='ISR4451',
+                        os_version='17.6', description='Site edge router')
+    assert device_description(documented) == 'Site edge router - Cisco ISR4451 17.6'
+
+    bare = Device(name='lon-sw-01', vendor='Cisco', model='C9300')
+    assert device_description(bare) == 'Cisco C9300'
+
+    commented = Device(name='lon-fw-01', description='Perimeter firewall')
+    assert device_description(commented) == 'Perimeter firewall'
+
+
+def test_description_is_not_duplicated_or_overlong():
+    from ibx_kentik_prepop.targets.kentik import DESCRIPTION_MAX, device_description
+
+    already = Device(name='lon-sw-01', vendor='Cisco', model='C9300',
+                     description='Access switch (Cisco C9300)')
+    assert device_description(already) == 'Access switch (Cisco C9300)'
+
+    long_text = Device(name='lon-sw-02', description='x' * 400)
+    assert len(device_description(long_text)) == DESCRIPTION_MAX
+
+
+def test_device_payload_carries_the_description():
+    device = Device(name='lon-rtr-01', description='Site edge router',
+                    vendor='Cisco', model='ISR4451')
+    body = target().device_payload(device)['device']
+
+    assert body['device_description'] == 'Site edge router - Cisco ISR4451'

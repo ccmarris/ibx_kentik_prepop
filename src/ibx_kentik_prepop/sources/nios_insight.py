@@ -49,7 +49,7 @@ __license__ = 'BSD'
 
 import logging
 from ibx_kentik_prepop.model import Device
-from ibx_kentik_prepop.sources.base import match_site, role_from_text
+from ibx_kentik_prepop.sources.base import describe, match_site, role_from_text
 from ibx_kentik_prepop.sources.nios import NIOS
 
 logger = logging.getLogger(__name__)
@@ -60,7 +60,7 @@ logger = logging.getLogger(__name__)
 # flattening below can be corrected without re-pulling the data.
 DEVICE_OBJTYPE = 'discovery:device'
 DEVICE_FIELDS = ('name,address,model,os_version,vendor,type,network_view,'
-                 'description,location,interface_count')
+                 'description,location,interface_count,extattrs')
 INTERFACE_OBJTYPE = 'discovery:deviceinterface'
 INTERFACE_FIELDS = ('device,name,ip_address,network_view,type,description,'
                     'speed,admin_status,oper_status')
@@ -98,6 +98,8 @@ class NetworkInsight(NIOS):
                 vendor=str(obj.get('vendor', '')),
                 model=str(obj.get('model', '')),
                 os_version=str(obj.get('os_version', '')),
+                description=describe(obj, self.config.device.description_keys,
+                                     obj.get('extattrs')),
                 interfaces=interfaces.get(str(obj.get('_ref', '')), []),
                 origin='network_insight',
                 raw=obj,

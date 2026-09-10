@@ -131,6 +131,7 @@ class Device:
     vendor: str = ''
     model: str = ''
     os_version: str = ''
+    description: str = ''
     site_name: str = ''
     sending_ips: tuple = ()
     interfaces: list = field(default_factory=list)

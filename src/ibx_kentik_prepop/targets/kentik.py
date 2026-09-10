@@ -103,6 +103,36 @@ def sending_ips_for(config, device: Device) -> list:
     return list(dict.fromkeys(addresses))
 
 
+# Kentik does not document a device_description length; 255 is a defensive cap.
+# VERIFY against a tenant if long descriptions matter.
+DESCRIPTION_MAX = 255
+
+
+def device_description(device: Device) -> str:
+    '''
+    Text for the Kentik device_description field
+
+    A description or comment carried by the source data leads, because someone
+    wrote it deliberately; the discovered hardware summary is appended so the
+    vendor, model and version are not lost.
+
+    Parameters:
+        device (Device): device candidate
+
+    Returns:
+        str: description, truncated to what the API is assumed to accept
+    '''
+    hardware = ' '.join(v for v in (device.vendor, device.model,
+                                    device.os_version) if v)
+    parts = [p for p in (device.description.strip(), hardware) if p]
+
+    # Don't repeat the hardware summary if the description already says it
+    if len(parts) == 2 and hardware.casefold() in parts[0].casefold():
+        parts = [parts[0]]
+
+    return ' - '.join(parts)[:DESCRIPTION_MAX]
+
+
 def build_device_payload(config, device: Device, site_id: str = '') -> dict:
     '''
     Build the device API request body for the configured mode
@@ -122,8 +152,7 @@ def build_device_payload(config, device: Device, site_id: str = '') -> dict:
     '''
     body = {
         'device_name': sanitise_device_name(device.name),
-        'device_description': ' '.join(v for v in (device.vendor, device.model,
-                                                   device.os_version) if v),
+        'device_description': device_description(device),
         # Required by the API even when BGP is not in use, in which case 'none'
         # means "use generic IP/ASN mapping". device_bgp_flowspec is the
         # boolean that accompanies it.

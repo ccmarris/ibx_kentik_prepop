@@ -68,6 +68,17 @@ device:
     - switch
     - firewall
 
+  # Fields and EA/tag names a device description is taken from, in order of
+  # preference. Whatever is found leads the Kentik device_description, with the
+  # vendor/model/version appended.
+  description_keys:
+    - description
+    - comment
+    - comments
+    - notes
+    - purpose
+    - role
+
   # flow (default) or nms - both use the same device API, the mode decides
   # which fields are populated.
   mode: flow
