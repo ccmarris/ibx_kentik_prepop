@@ -123,8 +123,17 @@ PLANS = [
      'max_fps': 10000, 'devices': [{'id': '1'}]},
 ]
 
-AGENTS = [{'id': 'agent-1', 'name': 'lon-collector', 'status': 'ACTIVE'},
-          {'id': 'agent-2', 'name': 'nyc-collector', 'status': 'ACTIVE'}]
+# The agent name lives on config.name, not at the top level - the mock uses the
+# real shape so the UI is exercised against it.
+AGENTS = [
+    {'id': 'agent-1', 'running': True,
+     'config': {'name': 'lon-collector', 'description': 'London collector',
+                'site_id': '42'},
+     'current_state': {'health': 'HEALTHY'}},
+    {'id': 'agent-2', 'running': False,
+     'config': {'name': 'nyc-collector', 'site_id': '101'},
+     'current_state': {'health': 'HEALTHY'}},
+]
 
 CREDENTIALS = [{'id': 'c1', 'name': 'snmp-ro'}, {'id': 'c2', 'name': 'snmp-v3'}]
 

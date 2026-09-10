@@ -260,9 +260,13 @@ async function loadNms(event) {
     if (data.error) { setStatus(data.error, true); return; }
     el('agent_id').innerHTML = '<option value="">-- select an agent --</option>' +
       (data.agents || []).map(function (agent) {
+        // The id is what gets submitted; the name is appended so the operator
+        // can tell the agents apart.
+        const label = [agent.id, agent.name].filter(function (part) {
+          return part;
+        }).join(' - ') + (agent.status ? ' (' + agent.status + ')' : '');
         return '<option value="' + escapeHtml(agent.id) + '">' +
-          escapeHtml(agent.name || agent.id) +
-          (agent.status ? ' (' + escapeHtml(agent.status) + ')' : '') + '</option>';
+          escapeHtml(label) + '</option>';
       }).join('');
     el('credential_name').innerHTML = '<option value="">-- none --</option>' +
       (data.credentials || []).map(function (credential) {

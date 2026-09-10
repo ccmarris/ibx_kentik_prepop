@@ -305,7 +305,10 @@ Universal Agent polling it:
 | `agent-full` | **Agent-based SNMP for Full Monitoring** — the agent also collects the full NMS metric set | the same, plus `monitoring_template_id` |
 
 `--device-mode nms` implies `agent-full`. Both agent modes **require an agent**
-(`--agent-id`, or the dropdown, populated from `GET /kagent/v202401/agents`) —
+(`--agent-id`, or the dropdown, populated from `GET /kagent/v202401/agents` —
+listed as `<id> - <name> (<status>)`, since the id is what gets submitted and
+the name is what tells them apart; note the name lives on the agent's
+`config.name`, not at the top level of the agent object) —
 a device created without one is never polled, so the apply refuses. Credentials
 come from `GET /credential/v202407alpha1/group`; a missing one warns rather than
 blocks, and full monitoring without a template warns that Kentik will apply its

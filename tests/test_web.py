@@ -165,6 +165,54 @@ def _one_site_plan():
                                 merged={'user_access': ['10.1.0.0/24']})])
 
 
+def test_agent_summary_reads_the_name_from_the_config(client):
+    from ibx_kentik_prepop.web.server import agent_summary
+
+    nested = agent_summary({'id': 'a1', 'running': True,
+                            'config': {'name': 'lon-collector',
+                                       'site_id': '42'}})
+    assert nested == {'id': 'a1', 'name': 'lon-collector', 'status': 'running',
+                      'site_id': '42'}
+
+    stopped = agent_summary({'id': 'a2', 'running': False, 'config': {}})
+    assert stopped['status'] == 'stopped'
+    assert stopped['name'] == ''
+
+    flat = agent_summary({'id': 'a3', 'name': 'legacy', 'status': 'ACTIVE'})
+    assert (flat['name'], flat['status']) == ('legacy', 'ACTIVE')
+
+    described = agent_summary({'id': 'a4',
+                               'config': {'description': 'spare collector'}})
+    assert described['name'] == 'spare collector'
+
+
+def test_nms_endpoint_flattens_agents(client, monkeypatch):
+    from ibx_kentik_prepop.web import server as web
+
+    class FakeKentik:
+        last_error = {}
+
+        def __init__(self, config):
+            pass
+
+        def list_agents(self):
+            return [{'id': 'a1', 'running': True,
+                     'config': {'name': 'lon-collector'}}]
+
+        def list_credentials(self):
+            return [{'id': 'c1', 'name': 'snmp-ro'}]
+
+        def error_text(self):
+            return ''
+
+    monkeypatch.setattr(web, 'KENTIK', FakeKentik)
+    payload = client.get('/api/kentik-nms').get_json()
+
+    assert payload['agents'][0]['name'] == 'lon-collector'
+    assert payload['agents'][0]['id'] == 'a1'
+    assert payload['credentials'][0]['name'] == 'snmp-ro'
+
+
 def test_kentik_check_reports_missing_credentials(client, tmp_path):
     other = tmp_path / 'nios-only.ini'
     other.write_text('[NIOS]\ngm = 10.0.0.1\nuser = admin\npass = secret\n',

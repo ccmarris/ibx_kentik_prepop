@@ -385,6 +385,37 @@ def kentik_plans():
                     'error': kentik.error_text()})
 
 
+def agent_summary(agent: dict) -> dict:
+    '''
+    Flatten a Kentik agent into id, name and status
+
+    The name lives on the agent's config (AgentConfig.name), not at the top
+    level, so reading only the top level leaves the operator picking between
+    bare ids. Flat shapes are still tolerated.
+
+    Parameters:
+        agent (dict): raw agent dict
+
+    Returns:
+        dict: id, name and status
+    '''
+    config = agent.get('config') or {}
+    install = agent.get('install') or {}
+    current = agent.get('current_state') or {}
+
+    name = str(config.get('name') or agent.get('name')
+               or agent.get('alias') or install.get('hostname')
+               or agent.get('hostname') or config.get('description') or '')
+
+    status = str(agent.get('status') or current.get('health_v2')
+                 or current.get('health') or '')
+    if not status and 'running' in agent:
+        status = 'running' if agent.get('running') else 'stopped'
+
+    return {'id': str(agent.get('id', '')), 'name': name, 'status': status,
+            'site_id': str(config.get('site_id') or '')}
+
+
 @app.route('/api/kentik-nms', methods=['GET'])
 def kentik_nms():
     '''
@@ -403,13 +434,7 @@ def kentik_nms():
         return jsonify({'error': '; '.join(problems)}), 400
 
     kentik = KENTIK(config)
-    agents = []
-    for agent in kentik.list_agents():
-        agents.append({'id': str(agent.get('id', '')),
-                       'name': str(agent.get('name')
-                                   or agent.get('alias')
-                                   or agent.get('hostname') or ''),
-                       'status': str(agent.get('status', ''))})
+    agents = [agent_summary(a) for a in kentik.list_agents()]
     credentials = []
     for credential in kentik.list_credentials():
         credentials.append({'name': str(credential.get('name', '')),
