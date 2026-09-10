@@ -318,10 +318,15 @@ under the buttons says exactly why.
 
 **Sites data** and **Device data** at the top of the form select the task. The
 site fields hide on a device run and vice versa, the results panels swap, and
-the Apply button relabels — the two jobs never share a screen. Changing a device
-tick box, a sending-IP selection, the mode or the plan invalidates the reviewed
-plan and asks for a fresh dry run, so an apply can never carry a selection you
-did not review.
+the Apply button relabels — the two jobs never share a screen.
+
+Changing a device tick box, a sending-IP selection, the mode or the plan
+invalidates the reviewed plan — and then **re-runs the dry run for you** so the
+fingerprint stays in step with what is on screen. Untick devices until you are
+within the plan's capacity and Apply enables itself a moment later; there is no
+need to press Dry run again. When Apply is disabled the reasons are listed under
+the buttons, with the numbers (for example `6 device(s) to create exceeds the 4
+slot(s) left on plan 'Free Flowpak Plan'`).
 
 ### Applying from the UI
 

@@ -114,14 +114,14 @@ function renderDevicePlan(plan) {
     box.addEventListener('change', function () {
       excluded[box.dataset.include] = !box.checked;
       box.closest('tr').classList.toggle('excluded', !box.checked);
-      invalidatePlan('Selection changed - run the dry run again to apply.');
+      invalidatePlan('Selection changed');
     });
   });
   el('device_plan_table').querySelectorAll('select[data-device]').forEach(function (picker) {
     picker.addEventListener('change', function () {
       sendingIps[picker.dataset.device] = Array.from(picker.selectedOptions)
         .map(function (option) { return option.value; });
-      invalidatePlan('Sending IPs changed - run the dry run again to apply.');
+      invalidatePlan('Sending IPs changed');
     });
   });
 
@@ -138,10 +138,55 @@ function renderDevicePlan(plan) {
   show('device_card', true);
 }
 
+let refreshTimer = null;
+let planInFlight = false;
+let refreshQueued = false;
+
 function invalidatePlan(message) {
   currentPlan = null;
   el('run_apply').disabled = true;
-  el('apply_hint').textContent = message;
+  el('apply_hint').textContent = message + ' - refreshing the plan...';
+  schedulePlanRefresh();
+}
+
+function schedulePlanRefresh() {
+  // Changing a selection only ever shrinks or re-points the change set, so
+  // rather than dead-ending on a stale plan the dry run is re-run and the
+  // fingerprint stays in step with what is on screen.
+  if (!el('site_key').value.trim()) { return; }
+  if (refreshTimer) { clearTimeout(refreshTimer); }
+  refreshTimer = setTimeout(function () {
+    refreshTimer = null;
+    if (planInFlight) {
+      refreshQueued = true;
+      return;
+    }
+    runPlan({ quiet: true });
+  }, 600);
+}
+
+function blockingReasons(plan) {
+  const reasons = (plan.apply_problems || []).slice();
+  if (!plan.kentik_available) {
+    reasons.push('Kentik credentials are not configured in ' +
+                 (plan.ini_file || 'the credentials file'));
+  }
+  return reasons;
+}
+
+function renderApplyBlockers(reasons) {
+  const node = el('apply_blockers');
+  if (!node) { return; }
+  if (!reasons.length) {
+    node.innerHTML = '';
+    node.classList.add('hidden');
+    return;
+  }
+  node.innerHTML = '<strong>Apply is disabled</strong><ul>' +
+    reasons.map(function (reason) {
+      return '<li>' + escapeHtml(reason) + '</li>';
+    }).join('') + '</ul>';
+  node.classList.remove('hidden');
 }
 
 async function loadPlans(event) {
@@ -277,13 +322,12 @@ function renderPlan(plan) {
 
     const changes = plan.stats.device_actions.create +
       plan.stats.device_actions.update;
-    const reasons = (plan.apply_problems || []).slice();
-    if (!plan.kentik_available) {
-      reasons.push('Kentik credentials are not configured in ' +
-                   (plan.ini_file || 'the credentials file'));
+    const reasons = blockingReasons(plan);
+    if (!changes) {
+      reasons.push('no devices are selected that need creating or updating');
     }
-    if (!changes) { reasons.push('no devices need creating or updating'); }
 
+    renderApplyBlockers(reasons);
     el('run_apply').disabled = reasons.length > 0;
     el('run_apply').title = reasons.join('. ');
     el('apply_hint').textContent = reasons.length
@@ -354,6 +398,7 @@ function renderPlan(plan) {
   if (!changes) {
     reasons.push('every site is already up to date, so there is nothing to apply');
   }
+  renderApplyBlockers(reasons);
   const applyable = reasons.length === 0;
   el('run_apply').disabled = !applyable;
   el('run_apply').title = applyable ? '' : reasons.join('. ');
@@ -467,14 +512,17 @@ async function loadKeys(event) {
   }
 }
 
-async function runPlan() {
+async function runPlan(options) {
+  const quiet = Boolean(options && options.quiet);
   const body = formBody();
   if (!body.site_key) {
     setStatus('A site EA/tag key is required.', true);
     return;
   }
   el('run_plan').disabled = true;
-  setStatus('Building the plan...', false);
+  planInFlight = true;
+  setStatus(quiet ? 'Refreshing the plan for your selection...'
+                  : 'Building the plan...', false);
   try {
     const response = await fetch('/api/plan', {
       method: 'POST',
@@ -496,6 +544,11 @@ async function runPlan() {
     setStatus('Plan failed: ' + error, true);
   } finally {
     el('run_plan').disabled = false;
+    planInFlight = false;
+    if (refreshQueued) {
+      refreshQueued = false;
+      schedulePlanRefresh();
+    }
   }
 }
 
@@ -794,7 +847,7 @@ el('task_devices').addEventListener('click', function () {
 });
 el('device_mode').addEventListener('change', function () {
   updateDeviceMode();
-  invalidatePlan('Mode changed - run the dry run again to apply.');
+  invalidatePlan('Mode changed');
   if (el('device_mode').value === 'nms' && !el('agent_id').options.length) {
     loadNms();
   }
@@ -802,16 +855,16 @@ el('device_mode').addEventListener('change', function () {
 el('load_plans').addEventListener('click', loadPlans);
 el('plan_select').addEventListener('change', function () {
   if (el('plan_select').value) { el('plan_id').value = el('plan_select').value; }
-  invalidatePlan('Plan changed - run the dry run again to apply.');
+  invalidatePlan('Plan changed');
 });
 el('plan_id').addEventListener('change', function () {
-  invalidatePlan('Plan id changed - run the dry run again to apply.');
+  invalidatePlan('Plan id changed');
 });
 el('load_nms').addEventListener('click', loadNms);
 el('include_all').addEventListener('click', function (event) {
   event.preventDefault();
   excluded = {};
-  invalidatePlan('All devices included - run the dry run again to apply.');
+  invalidatePlan('All devices included');
   el('device_plan_table').querySelectorAll('input[data-include]').forEach(function (box) {
     box.checked = true;
     box.closest('tr').classList.remove('excluded');
@@ -824,7 +877,7 @@ el('exclude_all').addEventListener('click', function (event) {
     excluded[box.dataset.include] = true;
     box.closest('tr').classList.add('excluded');
   });
-  invalidatePlan('All devices excluded - run the dry run again to apply.');
+  invalidatePlan('All devices excluded');
 });
 el('load_keys').addEventListener('click', loadKeys);
 el('check_kentik').addEventListener('click', checkKentik);

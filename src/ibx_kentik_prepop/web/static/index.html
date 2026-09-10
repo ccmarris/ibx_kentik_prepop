@@ -130,6 +130,12 @@ tr.excluded td { color: var(--ibx-text-muted); text-decoration: line-through; }
 tr.excluded td.keep { text-decoration: none; }
 select[multiple] { padding: 2px; font-size: 12px; }
 .row-actions { display: flex; gap: 12px; margin-bottom: 10px; font-size: 12px; }
+.blockers {
+  border-left: 4px solid #B4231E; background: var(--ibx-off-white);
+  padding: 10px 12px; margin-top: 12px; font-size: 13px;
+}
+.blockers ul { margin: 6px 0 0; padding-left: 18px; }
+.blockers.hidden { display: none; }
 a { color: var(--ibx-green); text-decoration: underline; }
 @media (max-width: 980px) { main { grid-template-columns: 1fr; } }
 </style>
@@ -249,6 +255,7 @@ a { color: var(--ibx-green); text-decoration: underline; }
         <button class="secondary" id="run_apply" disabled>Apply to Kentik</button>
       </div>
       <p class="hint" id="apply_hint">Apply is enabled once a dry run finds sites to create or update.</p>
+      <div class="blockers hidden" id="apply_blockers"></div>
     </div>
 
     <div class="card">
