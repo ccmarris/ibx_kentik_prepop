@@ -233,11 +233,21 @@ a { color: var(--ibx-green); text-decoration: underline; }
             <p class="hint">Override per device in the results table.</p>
           </div>
 
-          <div id="nms_fields" class="hidden">
-            <label for="agent_id">NMS agent (required)</label>
+          <label for="snmp_mode">SNMP collection</label>
+          <select id="snmp_mode">
+            <option value="none">None</option>
+            <option value="agent-flow">Agent-based SNMP for Flow Enrichment (Traffic device)</option>
+            <option value="agent-full">Agent-based SNMP for Full Monitoring</option>
+          </select>
+          <p class="hint">Both agent options assign a Universal Agent to the device. A community string can only be set in the YAML, to keep it out of the browser.</p>
+
+          <div id="agent_fields" class="hidden">
+            <label for="agent_id">Universal Agent (required)</label>
             <select id="agent_id"></select>
-            <label for="credential_name">SNMP credential (optional)</label>
+            <label for="credential_name">SNMP credential</label>
             <select id="credential_name"></select>
+            <label for="monitoring_template_id">Monitoring template id (full monitoring)</label>
+            <input type="number" id="monitoring_template_id" min="1" placeholder="Kentik default">
             <p class="hint"><a href="#" id="load_nms">Load agents and credentials</a></p>
           </div>
 

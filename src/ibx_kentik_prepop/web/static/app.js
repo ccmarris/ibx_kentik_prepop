@@ -3,8 +3,8 @@
 const VALUE_FIELDS = ['config_file', 'source', 'site_key', 'class_key',
                       'site_type_key', 'network_view', 'ip_space', 'site_filter',
                       'max_prefix_len', 'export_prefix', 'device_mode',
-                      'sending_ips', 'sample_rate', 'plan_id', 'agent_id',
-                      'credential_name',
+                      'snmp_mode', 'sending_ips', 'sample_rate', 'plan_id',
+                      'agent_id', 'credential_name', 'monitoring_template_id',
                       'bgp_type', 'bgp_neighbor_asn', 'bgp_neighbor_ip',
                       'bgp_neighbor_ip6', 'bgp_device_id'];
 const FLAG_FIELDS = ['include_address_blocks', 'devices',
@@ -59,7 +59,17 @@ function setTask(task) {
 function updateDeviceMode() {
   const nms = el('device_mode').value === 'nms';
   el('flow_fields').classList.toggle('hidden', nms);
-  el('nms_fields').classList.toggle('hidden', !nms);
+  // An NMS device is fully monitored by an agent by definition.
+  if (nms && el('snmp_mode').value.indexOf('agent') !== 0) {
+    el('snmp_mode').value = 'agent-full';
+  }
+  updateSnmpMode();
+}
+
+function updateSnmpMode() {
+  const agent = el('snmp_mode').value.indexOf('agent') === 0;
+  el('agent_fields').classList.toggle('hidden', !agent);
+  if (agent && !el('agent_id').options.length) { loadNms(); }
 }
 
 function updateBgpType() {
@@ -859,9 +869,15 @@ el('task_devices').addEventListener('click', function () {
 el('device_mode').addEventListener('change', function () {
   updateDeviceMode();
   invalidatePlan('Mode changed');
-  if (el('device_mode').value === 'nms' && !el('agent_id').options.length) {
-    loadNms();
-  }
+});
+el('snmp_mode').addEventListener('change', function () {
+  updateSnmpMode();
+  invalidatePlan('SNMP collection changed');
+});
+['agent_id', 'credential_name', 'monitoring_template_id'].forEach(function (field) {
+  el(field).addEventListener('change', function () {
+    invalidatePlan('Agent settings changed');
+  });
 });
 el('bgp_type').addEventListener('change', function () {
   updateBgpType();
@@ -908,5 +924,6 @@ el('run_apply').addEventListener('click', runApply);
 loadConfig();
 loadInis();
 updateDeviceMode();
+updateSnmpMode();
 updateBgpType();
 setTask('sites');

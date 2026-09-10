@@ -49,6 +49,7 @@ __license__ = 'BSD'
 
 import logging
 import requests
+from ibx_kentik_prepop.config import AGENT_SNMP_MODES
 from ibx_kentik_prepop.model import (CLASSIFICATIONS, CLASS_TO_KENTIK, Device,
                                      MODE_NMS, Site)
 from ibx_kentik_prepop.summarise import sanitise_device_name, site_match_key
@@ -172,17 +173,7 @@ def build_device_payload(config, device: Device, site_id: str = '') -> dict:
     elif config.device.bgp_type == 'other_device' and config.device.bgp_device_id:
         body['use_bgp_device_id'] = config.device.bgp_device_id
 
-    if config.device.mode == MODE_NMS:
-        nms = {'ip_address': device.mgmt_ip}
-        if config.device.agent_id:
-            nms['agent_id'] = config.device.agent_id
-        if config.device.credential_name:
-            nms['snmp'] = {'credential_name': config.device.credential_name,
-                           'port': config.device.snmp_port}
-        body['nms'] = nms
-        if config.device.monitoring_template_id:
-            body['monitoring_template_id'] = config.device.monitoring_template_id
-    else:
+    if config.device.mode != MODE_NMS:
         body['device_subtype'] = ROLE_TO_SUBTYPE.get(device.role,
                                                      config.device.subtype)
         body['device_sample_rate'] = config.device.sample_rate
@@ -192,6 +183,33 @@ def build_device_payload(config, device: Device, site_id: str = '') -> dict:
             body['plan_id'] = config.device.plan_id
         if device.mgmt_ip:
             body['device_snmp_ip'] = device.mgmt_ip
+
+    # SNMP collection is orthogonal to what the device is for. An agent polling
+    # a traffic device is the portal's "Agent-based SNMP for Flow Enrichment";
+    # the same block is how an NMS device collects metrics.
+    if config.device.snmp_mode in AGENT_SNMP_MODES:
+        nms = {'ip_address': device.mgmt_ip}
+        if config.device.agent_id:
+            nms['agent_id'] = config.device.agent_id
+        if config.device.credential_name:
+            nms['snmp'] = {'credential_name': config.device.credential_name,
+                           'port': config.device.snmp_port}
+        body['nms'] = nms
+        # VERIFY per tenant: the portal may also set this for agent-based flow
+        # SNMP. It is only sent when explicitly configured, because the API
+        # documents it as alphanumeric-only and a hyphenated credential name
+        # would be rejected.
+        if config.device.flow_snmp_credential_name:
+            body['flow_snmp_credential_name'] = \
+                config.device.flow_snmp_credential_name
+    elif config.device.snmp_mode == 'community' and config.device.snmp_community:
+        body['device_snmp_community'] = config.device.snmp_community
+
+    # The monitoring template governs the full metric set, so it only applies
+    # when the agent is doing full monitoring rather than flow enrichment.
+    if (config.device.snmp_mode == 'agent-full'
+            and config.device.monitoring_template_id):
+        body['monitoring_template_id'] = config.device.monitoring_template_id
 
     return {'device': body}
 

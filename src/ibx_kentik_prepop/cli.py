@@ -111,6 +111,15 @@ def parseargs():
     parser.add_argument('--sending-ips', choices=['mgmt', 'all'], default=None,
                         help='flow exporter source addresses: the management IP '
                              '(default) or every discovered interface address')
+    parser.add_argument('--snmp-mode',
+                        choices=['none', 'community', 'agent-flow', 'agent-full'],
+                        default=None,
+                        help='how SNMP is collected: none (default), community '
+                             '(Kentik polls with a community string from the '
+                             'YAML), agent-flow (a Universal Agent polls to '
+                             'enrich this flow device) or agent-full (the agent '
+                             'also collects the full NMS metric set). NMS mode '
+                             'implies agent-full')
     parser.add_argument('--sample-rate', type=int, default=None,
                         help='device_sample_rate for flow devices (default: 1)')
     parser.add_argument('--plan-name', default=None,

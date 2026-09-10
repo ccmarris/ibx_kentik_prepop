@@ -167,6 +167,22 @@ DEFAULT_SNMP_PORT = 161
 DEFAULT_DESCRIPTION_KEYS = ('description', 'comment', 'comments', 'notes',
                             'purpose', 'device_description', 'role')
 
+# How SNMP is collected, independent of what the device is for. Both agent
+# options attach a Universal Agent through the device's nms block - the portal
+# shows them on the device's SNMP tab as a Collection Agent:
+#   none        - no SNMP
+#   community   - Kentik polls with a community string (device_snmp_community)
+#   agent-flow  - "Agent-based SNMP for Flow Enrichment (Traffic device)": the
+#                 agent polls interface data to enrich the device's flow
+#   agent-full  - "Agent-based SNMP for Full Monitoring": the agent also
+#                 collects the full NMS metric set, which is where the
+#                 monitoring template applies
+# Both agent modes need an agent and a credential from the Kentik credential
+# vault.
+DEFAULT_SNMP_MODE = 'none'
+SNMP_MODES = ('none', 'community', 'agent-flow', 'agent-full')
+AGENT_SNMP_MODES = ('agent-flow', 'agent-full')
+
 DEFAULT_BGP_TYPE = 'none'
 BGP_TYPES = ('none', 'device', 'other_device')
 # device_bgp_flowspec is the boolean that sits alongside it
@@ -264,6 +280,9 @@ class DeviceConfig:
     plan_id: int = 0
     sample_rate: int = DEFAULT_SAMPLE_RATE
     minimize_snmp: bool = True
+    snmp_mode: str = DEFAULT_SNMP_MODE
+    snmp_community: str = ''
+    flow_snmp_credential_name: str = ''
     sending_ips: str = DEFAULT_SENDING_IPS
     sending_ip_map: dict = field(default_factory=dict)
     bgp_type: str = DEFAULT_BGP_TYPE
@@ -604,6 +623,15 @@ def build_config(args, ini_file: str = '', yaml_file: str = '') -> ProjectConfig
     if sending_ips not in ('mgmt', 'all'):
         raise ValueError(f"sending_ips must be 'mgmt' or 'all', got {sending_ips!r}")
 
+    snmp_mode = str(getattr(args, 'snmp_mode', None)
+                    or device_yaml.get('snmp_mode', DEFAULT_SNMP_MODE)).lower()
+    if snmp_mode not in SNMP_MODES:
+        raise ValueError(f"snmp_mode must be one of {', '.join(SNMP_MODES)}, "
+                         f'got {snmp_mode!r}')
+    # An NMS device is fully monitored by an agent by definition.
+    if mode == 'nms':
+        snmp_mode = 'agent-full'
+
     bgp_type = str(getattr(args, 'bgp_type', None)
                    or device_yaml.get('bgp_type', DEFAULT_BGP_TYPE)).lower()
     if bgp_type not in BGP_TYPES:
@@ -637,6 +665,10 @@ def build_config(args, ini_file: str = '', yaml_file: str = '') -> ProjectConfig
         sample_rate=int(getattr(args, 'sample_rate', None)
                         or device_yaml.get('sample_rate', DEFAULT_SAMPLE_RATE)),
         minimize_snmp=_as_bool(device_yaml.get('minimize_snmp'), True),
+        snmp_mode=snmp_mode,
+        snmp_community=str(device_yaml.get('snmp_community', '')),
+        flow_snmp_credential_name=str(
+            device_yaml.get('flow_snmp_credential_name', '')),
         sending_ips=sending_ips,
         sending_ip_map=dict(getattr(args, 'sending_ip_map', None) or {}),
         bgp_type=bgp_type,

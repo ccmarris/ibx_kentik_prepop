@@ -293,10 +293,30 @@ are selectable (`--bgp-type`, `--bgp-flowspec`, or the controls in the UI):
 The dependent fields are checked before anything is written, so a missing ASN
 is a refusal up front rather than a 400 from the API halfway through a run.
 
-NMS **requires an agent** (`--agent-id`, or the dropdown in the UI, populated
-from `GET /kagent/v202401/agents`): a device created without one never polls, so
-the apply refuses. SNMP credentials come from
-`GET /credential/v202407alpha1/group`.
+**SNMP collection** is a separate choice from what the device is *for*
+(`--snmp-mode`, or the dropdown in the UI), because a traffic device can have a
+Universal Agent polling it:
+
+| `--snmp-mode` | What it does | Payload |
+|---|---|---|
+| `none` (default) | no SNMP | — |
+| `community` | Kentik polls with a community string (YAML only, to keep it out of the browser) | `device_snmp_community` |
+| `agent-flow` | **Agent-based SNMP for Flow Enrichment (Traffic device)** — the agent polls interface data to enrich this device's flow | `nms{agent_id, ip_address, snmp{credential_name, port}}` |
+| `agent-full` | **Agent-based SNMP for Full Monitoring** — the agent also collects the full NMS metric set | the same, plus `monitoring_template_id` |
+
+`--device-mode nms` implies `agent-full`. Both agent modes **require an agent**
+(`--agent-id`, or the dropdown, populated from `GET /kagent/v202401/agents`) —
+a device created without one is never polled, so the apply refuses. Credentials
+come from `GET /credential/v202407alpha1/group`; a missing one warns rather than
+blocks, and full monitoring without a template warns that Kentik will apply its
+own default.
+
+The agent is attached through the device's `nms` block, which is the only agent
+field the device API has — the portal surfaces it as the *Collection Agent* on a
+device's SNMP tab. One field remains **VERIFY**: `flow_snmp_credential_name`
+looks like it may also be set for agent-based flow SNMP, but the API documents
+it as alphanumeric-only (a hyphenated credential name would be rejected), so it
+is only sent when explicitly configured as `device.flow_snmp_credential_name`.
 
 **The licence plan.** Plans are read from `GET /api/v5/plans` and resolved by
 name — **`Free Flowpak Plan`** by default (Kentik's no-cost flow plan), matched

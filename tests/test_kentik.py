@@ -64,14 +64,17 @@ def test_device_payload_sanitises_the_name_and_omits_plan_id():
     assert 'plan_id' not in body
 
 
-def test_nms_payload_carries_the_agent_and_credential():
+def device_config(**overrides):
     from dataclasses import replace
     from conftest import make_config as base_config
     config = base_config()
-    config = replace(config, device=replace(config.device, mode='nms',
-                                            agent_id='agent-1',
-                                            credential_name='snmp-ro',
-                                            monitoring_template_id=7))
+    return replace(config, device=replace(config.device, **overrides))
+
+
+def test_nms_payload_carries_the_agent_and_credential():
+    config = device_config(mode='nms', snmp_mode='agent-full',
+                           agent_id='agent-1', credential_name='snmp-ro',
+                           monitoring_template_id=7)
     device = Device(name='lon-sw-01', mgmt_ip='10.1.0.2', role='switch')
     body = KENTIK(config).device_payload(device, site_id='42')['device']
 
@@ -80,6 +83,63 @@ def test_nms_payload_carries_the_agent_and_credential():
     assert body['monitoring_template_id'] == 7
     assert 'sending_ips' not in body
     assert 'plan_id' not in body
+
+
+def test_flow_device_with_agent_based_snmp_for_flow_enrichment():
+    config = device_config(snmp_mode='agent-flow', agent_id='agent-1',
+                           credential_name='snmp-ro',
+                           monitoring_template_id=7)
+    device = Device(name='lon-rtr-01', mgmt_ip='10.1.0.1', role='router')
+    body = KENTIK(config).device_payload(device, site_id='42')['device']
+
+    # a traffic device: the flow fields stay, and the agent is attached
+    assert body['device_subtype'] == 'router'
+    assert body['sending_ips'] == ['10.1.0.1']
+    assert body['nms'] == {'ip_address': '10.1.0.1', 'agent_id': 'agent-1',
+                           'snmp': {'credential_name': 'snmp-ro', 'port': 161}}
+    # flow enrichment does not take a monitoring template
+    assert 'monitoring_template_id' not in body
+
+
+def test_flow_device_with_agent_based_snmp_for_full_monitoring():
+    config = device_config(snmp_mode='agent-full', agent_id='agent-1',
+                           credential_name='snmp-ro',
+                           monitoring_template_id=7)
+    body = KENTIK(config).device_payload(
+        Device(name='lon-rtr-01', mgmt_ip='10.1.0.1', role='router'))['device']
+
+    assert body['nms']['agent_id'] == 'agent-1'
+    assert body['monitoring_template_id'] == 7
+    assert body['device_subtype'] == 'router'
+
+
+def test_snmp_modes_none_and_community():
+    device = Device(name='lon-rtr-01', mgmt_ip='10.1.0.1', role='router')
+
+    bare = KENTIK(device_config()).device_payload(device)['device']
+    assert 'nms' not in bare and 'device_snmp_community' not in bare
+    assert bare['device_snmp_ip'] == '10.1.0.1'
+
+    community = KENTIK(device_config(snmp_mode='community',
+                                     snmp_community='public')
+                       ).device_payload(device)['device']
+    assert community['device_snmp_community'] == 'public'
+    assert 'nms' not in community
+
+
+def test_flow_snmp_credential_is_only_sent_when_configured():
+    device = Device(name='lon-rtr-01', mgmt_ip='10.1.0.1', role='router')
+
+    default = KENTIK(device_config(snmp_mode='agent-flow', agent_id='a',
+                                   credential_name='snmp-ro')
+                     ).device_payload(device)['device']
+    assert 'flow_snmp_credential_name' not in default
+
+    explicit = KENTIK(device_config(snmp_mode='agent-flow', agent_id='a',
+                                    credential_name='snmp-ro',
+                                    flow_snmp_credential_name='snmpro')
+                      ).device_payload(device)['device']
+    assert explicit['flow_snmp_credential_name'] == 'snmpro' 
 
 
 def test_sending_ips_policy_and_per_device_override():

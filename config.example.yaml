@@ -107,10 +107,23 @@ device:
   bgp_neighbor_ip6: ''
   bgp_device_id: ''
 
-  # NMS only. An agent is required - a device created without one never polls.
+  # How SNMP is collected: none | community | agent-flow | agent-full.
+  #   agent-flow = "Agent-based SNMP for Flow Enrichment (Traffic device)"
+  #   agent-full = "Agent-based SNMP for Full Monitoring"
+  # Both agent modes require agent_id. mode: nms implies agent-full.
+  snmp_mode: none
+
+  # Only used with snmp_mode: community. Kept out of the web UI deliberately.
+  snmp_community: ''
+
+  # VERIFY: the portal may also set this for agent-based flow SNMP. Only sent
+  # when set here, because the API documents it as alphanumeric only.
+  flow_snmp_credential_name: ''
+
   agent_id: ''
   credential_name: ''
   snmp_port: 161
+  # Applies to agent-full only.
   monitoring_template_id: 0
 
   # Devices that already exist are reported, not touched, unless this is set -

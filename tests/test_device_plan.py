@@ -215,15 +215,42 @@ def test_capacity_warning_and_hard_stop(monkeypatch):
     assert device_apply_problems(allowed, plan) == []
 
 
-def test_nms_without_an_agent_is_blocked(monkeypatch):
-    plan, config = build(config=device_config(mode='nms'), kentik=FakeKentik(),
-                         monkeypatch=monkeypatch)
+def test_agent_based_snmp_without_an_agent_is_blocked(monkeypatch):
+    plan, config = build(config=device_config(mode='nms', snmp_mode='agent-full'),
+                         kentik=FakeKentik(), monkeypatch=monkeypatch)
 
-    assert 'nms_agent' in [w.category for w in plan.warnings]
-    assert device_apply_problems(config, plan) == ['NMS mode needs an agent to be selected']
+    assert 'snmp_agent' in [w.category for w in plan.warnings]
+    assert 'Universal Agent' in device_apply_problems(config, plan)[0]
 
     with_agent = replace(config, device=replace(config.device, agent_id='agent-1'))
     assert device_apply_problems(with_agent, plan) == []
+
+
+def test_flow_enrichment_also_requires_an_agent(monkeypatch):
+    plan, config = build(config=device_config(snmp_mode='agent-flow'),
+                         kentik=FakeKentik(), monkeypatch=monkeypatch)
+
+    assert 'snmp_agent' in [w.category for w in plan.warnings]
+    assert any('Universal Agent' in p for p in device_apply_problems(config, plan))
+
+
+def test_agent_without_a_credential_warns_but_does_not_block(monkeypatch):
+    plan, config = build(config=device_config(snmp_mode='agent-flow',
+                                              agent_id='agent-1'),
+                         kentik=FakeKentik(), monkeypatch=monkeypatch)
+
+    assert 'snmp_credential' in [w.category for w in plan.warnings]
+    assert device_apply_problems(config, plan) == []
+
+
+def test_full_monitoring_without_a_template_warns(monkeypatch):
+    plan, config = build(config=device_config(snmp_mode='agent-full',
+                                              agent_id='agent-1',
+                                              credential_name='snmp-ro'),
+                         kentik=FakeKentik(), monkeypatch=monkeypatch)
+
+    assert 'monitoring_template' in [w.category for w in plan.warnings]
+    assert device_apply_problems(config, plan) == []
 
 
 def test_apply_device_plan_creates_skips_and_excludes(monkeypatch, tmp_path):

@@ -52,6 +52,7 @@ import json
 import logging
 from datetime import datetime, timezone
 from dataclasses import replace
+from ibx_kentik_prepop.config import AGENT_SNMP_MODES
 from ibx_kentik_prepop.model import (ACTION_CREATE, ACTION_EXISTS,
                                      ACTION_NO_CHANGE, ACTION_UPDATE,
                                      CLASSIFICATIONS, DevicePlan, MODE_FLOW,
@@ -85,7 +86,8 @@ def plan_fingerprint(plan) -> str:
         str: short hex digest
     '''
     payload = {'task': plan.task, 'sites': [], 'devices': [],
-               'device_mode': plan.device_mode, 'plan_id': plan.plan_id}
+               'device_mode': plan.device_mode, 'snmp_mode': plan.snmp_mode,
+               'agent_id': plan.agent_id, 'plan_id': plan.plan_id}
 
     for entry in sorted(plan.entries, key=lambda e: e.site.name.casefold()):
         payload['sites'].append({
@@ -316,6 +318,8 @@ def build_device_plan(config, kentik=None) -> tuple:
                 site_key=config.site.site_key,
                 task=TASK_DEVICES,
                 device_mode=config.device.mode,
+                snmp_mode=config.device.snmp_mode,
+                agent_id=config.device.agent_id,
                 plan_name=config.device.plan_name,
                 generated=datetime.now(timezone.utc).isoformat(timespec='seconds'))
 
@@ -374,11 +378,23 @@ def build_device_plan(config, kentik=None) -> tuple:
                              'cannot be created',
                              'enter a plan id, or switch to NMS mode')
 
-    if config.device.mode == MODE_NMS and not config.device.agent_id:
-        plan.add_warning('nms_agent',
-                         'NMS mode needs an agent - a device created without one '
-                         'never polls',
+    if config.device.snmp_mode in AGENT_SNMP_MODES and not config.device.agent_id:
+        plan.add_warning('snmp_agent',
+                         'Agent-based SNMP needs a Universal Agent - a device '
+                         'created without one is never polled',
                          'pick an agent before applying')
+    if (config.device.snmp_mode in AGENT_SNMP_MODES and config.device.agent_id
+            and not config.device.credential_name):
+        plan.add_warning('snmp_credential',
+                         'No SNMP credential selected, so the agent has nothing '
+                         'to poll with',
+                         'pick a credential from the Kentik credential vault')
+    if (config.device.snmp_mode == 'agent-full'
+            and not config.device.monitoring_template_id):
+        plan.add_warning('monitoring_template',
+                         'Full monitoring with no monitoring template - Kentik '
+                         'will apply its own default',
+                         'set a template id to choose the polling targets')
 
     # Canonical spelling per site, so a device matched via a subnet tagged with
     # a variant spelling still reports (and resolves) the same site as the site
@@ -471,8 +487,9 @@ def device_apply_problems(config, plan) -> list:
     problems = []
     creates = sum(1 for e in plan.included_devices() if e.action == ACTION_CREATE)
 
-    if config.device.mode == MODE_NMS and not config.device.agent_id:
-        problems.append('NMS mode needs an agent to be selected')
+    if config.device.snmp_mode in AGENT_SNMP_MODES and not config.device.agent_id:
+        problems.append('Agent-based SNMP needs a Universal Agent to be '
+                        'selected - a device with no agent is never polled')
 
     if creates and config.device.bgp_type == 'device':
         if not config.device.bgp_neighbor_asn:

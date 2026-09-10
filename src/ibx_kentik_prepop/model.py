@@ -331,6 +331,8 @@ class Plan:
     device_entries: list = field(default_factory=list)
     warnings: list = field(default_factory=list)
     device_mode: str = MODE_FLOW
+    snmp_mode: str = 'none'
+    agent_id: str = ''
     plan_id: int = 0
     plan_name: str = ''
     capacity: dict = field(default_factory=dict)
@@ -408,6 +410,8 @@ class Plan:
             'generated': self.generated,
             'task': self.task,
             'device_mode': self.device_mode,
+            'snmp_mode': self.snmp_mode,
+            'agent_id': self.agent_id,
             'plan_id': self.plan_id,
             'plan_name': self.plan_name,
             'capacity': self.capacity,

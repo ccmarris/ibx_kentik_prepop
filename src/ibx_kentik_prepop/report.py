@@ -245,6 +245,8 @@ def render_table(plan, dry_run: bool = True) -> str:
                  else f" ({capacity['remaining']} of {capacity['max_devices']} "
                       f"slot(s) left)")
         out.write(f"Mode: {plan.device_mode}   "
+                  f"SNMP: {plan.snmp_mode}"
+                  f"{f' via agent {plan.agent_id}' if plan.agent_id else ''}   "
                   f"Plan: {plan.plan_name or 'none'}"
                   f"{'' if not plan.plan_id else f' (id {plan.plan_id})'}{slots}\n")
         out.write(f"Devices: {stats['device_entries']} "
