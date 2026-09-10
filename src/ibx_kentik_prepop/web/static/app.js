@@ -174,7 +174,6 @@ function schedulePlanRefresh() {
   // Changing a selection only ever shrinks or re-points the change set, so
   // rather than dead-ending on a stale plan the dry run is re-run and the
   // fingerprint stays in step with what is on screen.
-  if (!el('site_key').value.trim()) { return; }
   if (refreshTimer) { clearTimeout(refreshTimer); }
   refreshTimer = setTimeout(function () {
     refreshTimer = null;
@@ -540,10 +539,6 @@ async function loadKeys(event) {
 async function runPlan(options) {
   const quiet = Boolean(options && options.quiet);
   const body = formBody();
-  if (!body.site_key) {
-    setStatus('A site EA/tag key is required.', true);
-    return;
-  }
   el('run_plan').disabled = true;
   planInFlight = true;
   setStatus(quiet ? 'Refreshing the plan for your selection...'
@@ -614,10 +609,6 @@ function renderExport(data) {
 
 async function runExport() {
   const body = formBody();
-  if (!body.site_key) {
-    setStatus('A site EA/tag key is required.', true);
-    return;
-  }
   el('run_export').disabled = true;
   setStatus('Building the export...', false);
   try {

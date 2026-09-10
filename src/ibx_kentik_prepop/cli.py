@@ -84,8 +84,9 @@ def parseargs():
                              'before devices can be attached to them')
     parser.add_argument('--source', choices=['nios', 'uddi'], default='uddi',
                         help='Infoblox platform to read from (default: uddi)')
-    parser.add_argument('--site-key', help='EA (NIOS) or tag (UDDI) key holding '
-                                           'the site name')
+    parser.add_argument('--site-key', default=None,
+                        help="EA (NIOS) or tag (UDDI) key holding the site name "
+                             "(default: 'Site')")
     parser.add_argument('--class-key', help='optional EA/tag key overriding the '
                                             'Kentik address classification')
     parser.add_argument('--site-type-key', help='optional EA/tag key holding the '
@@ -306,8 +307,7 @@ def main() -> int:
     config = build_config(args, ini_file=args.config, yaml_file=args.yaml)
 
     if args.list_keys:
-        problems = [p for p in validate_source_credentials(config)
-                    if 'site EA/tag' not in p]
+        problems = validate_source_credentials(config)
         if problems:
             for problem in problems:
                 print(f'ERROR: {problem}', file=sys.stderr)

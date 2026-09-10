@@ -336,6 +336,16 @@ def build_device_plan(config, kentik=None) -> tuple:
     for category, message, detail in warnings:
         plan.add_warning(category, message, detail)
 
+    # The site key now has a default, so a key that matches nothing has to be
+    # said out loud rather than looking like an empty source.
+    if records and not any(r.get('site') for r in records):
+        plan.add_warning('site_key_not_found',
+                         f'No subnet carries the site key '
+                         f'{config.site.site_key!r}, so no sites could be '
+                         f'derived',
+                         'run with --list-keys to see which EA/tag keys are '
+                         'populated, then pass the right one with --site-key')
+
     device_source = get_device_source(config, ipam_source, plan)
     devices = device_source.get_devices(records)
     wanted = tuple(r.lower() for r in config.device.roles)
@@ -546,6 +556,16 @@ def build_plan(config, kentik=None) -> Plan:
     sites, warnings = build_sites(records, config)
     for category, message, detail in warnings:
         plan.add_warning(category, message, detail)
+
+    # The site key now has a default, so a key that matches nothing has to be
+    # said out loud rather than looking like an empty source.
+    if records and not any(r.get('site') for r in records):
+        plan.add_warning('site_key_not_found',
+                         f'No subnet carries the site key '
+                         f'{config.site.site_key!r}, so no sites could be '
+                         f'derived',
+                         'run with --list-keys to see which EA/tag keys are '
+                         'populated, then pass the right one with --site-key')
 
     if config.device.enabled:
         device_source = get_device_source(config, ipam_source, plan)

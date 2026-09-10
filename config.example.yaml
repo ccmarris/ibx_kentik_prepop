@@ -8,8 +8,9 @@
 source: uddi
 
 site:
-  # EA (NIOS) or tag (UDDI) key holding the site name. Also settable with
-  # --site-key. Use --list-keys to see what is actually populated.
+  # EA (NIOS) or tag (UDDI) key holding the site name. Defaults to 'Site' when
+  # unset here and not given with --site-key. Use --list-keys to see what is
+  # actually populated.
   site_key: Site
 
   # Optional EA/tag key overriding the Kentik address classification.

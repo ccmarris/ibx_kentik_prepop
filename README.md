@@ -90,8 +90,13 @@ Find out which EA/tag keys are actually populated:
 Dry run — the default, and the thing you should read carefully:
 
 ```bash
-./ibx_kentik_prepop.py -c ibx_kentik.ini --source uddi --site-key Site
+./ibx_kentik_prepop.py -c ibx_kentik.ini --source uddi
 ```
+
+`--site-key` defaults to **`Site`**, the conventional EA/tag name, so it only
+needs supplying when your metadata uses something else (`--site-key Location`).
+If the key matches nothing, the report says so and points at `--list-keys`
+rather than quietly producing no sites.
 
 Apply it:
 
@@ -148,7 +153,8 @@ change.
 
 ## How sites are derived
 
-1. **Group** subnets by the value of the site EA/tag (`--site-key`). One
+1. **Group** subnets by the value of the site EA/tag (`--site-key`, default
+   `Site`). One
    distinct value becomes one Kentik site. Values are whitespace-normalised and
    compared case-insensitively, so `LON-DC1 ` and `lon-dc1` are one site (and
    the merge is reported).

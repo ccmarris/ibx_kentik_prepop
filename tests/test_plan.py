@@ -182,3 +182,16 @@ def test_fingerprint_covers_the_outcome_not_the_timestamp():
     assert plan_fingerprint(plan_for(['10.1.0.0/24', '10.2.0.0/24'])) != baseline
     assert plan_fingerprint(plan_for(['10.1.0.0/24'],
                                      action=ACTION_UPDATE)) != baseline
+
+
+def test_a_site_key_that_matches_nothing_is_reported(monkeypatch):
+    config = make_config()
+    records = [record('10.1.0.0/24', site=''), record('10.2.0.0/24', site='')]
+    monkeypatch.setattr(plan_module, 'get_source', lambda cfg: FakeSource(records))
+
+    plan = build_plan(config, kentik=None)
+    warning = [w for w in plan.warnings if w.category == 'site_key_not_found']
+
+    assert warning, [w.category for w in plan.warnings]
+    assert '--list-keys' in warning[0].detail
+    assert plan.entries == []

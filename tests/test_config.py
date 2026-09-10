@@ -6,7 +6,8 @@ Tests for credential loading from the ini file
 
 from argparse import Namespace
 from ibx_kentik_prepop.config import (build_config, read_ini,
-                                      validate_kentik_credentials)
+                                      validate_kentik_credentials,
+                                      validate_source_credentials)
 
 
 def write(tmp_path, text, name='creds.ini'):
@@ -110,3 +111,23 @@ def test_missing_file_is_not_fatal(tmp_path):
     config = config_for(str(tmp_path / 'nope.ini'))
     assert config.kentik.email == ''
     assert validate_kentik_credentials(config)
+
+
+def test_site_key_defaults_to_site(tmp_path):
+    ini = write(tmp_path, '[UDDI]\napi_key = k\n')
+    config = config_for(ini)
+
+    assert config.site.site_key == 'Site'
+    assert validate_source_credentials(config) == []
+
+
+def test_an_explicit_site_key_still_wins(tmp_path):
+    from argparse import Namespace
+    ini = write(tmp_path, '[UDDI]\napi_key = k\n')
+    args = Namespace(source='uddi', site_key='Location', class_key=None,
+                     site_type_key=None, max_prefix_len=None, site_filter=None,
+                     include_address_blocks=False, devices=False,
+                     use_insight=False, use_uai=False, use_gateways=False,
+                     network_view=None, ip_space=None, gm=None)
+
+    assert build_config(args, ini_file=ini).site.site_key == 'Location'

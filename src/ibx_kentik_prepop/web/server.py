@@ -318,11 +318,10 @@ def get_keys():
 
     body = {'source': request.args.get('source', 'uddi'),
             'network_view': request.args.get('network_view', ''),
-            'ip_space': request.args.get('ip_space', ''),
-            'site_key': 'placeholder'}
+            'ip_space': request.args.get('ip_space', '')}
     config = build_config(form_namespace(body), ini_file=ini_file, yaml_file=YAML_FILE)
 
-    problems = [p for p in validate_source_credentials(config) if 'site EA/tag' not in p]
+    problems = validate_source_credentials(config)
     if problems:
         response = jsonify({'error': '; '.join(problems)}), 400
     else:

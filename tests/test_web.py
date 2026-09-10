@@ -122,10 +122,20 @@ def test_export_endpoint_rejects_a_bad_override(client):
     assert response.status_code == 400
 
 
-def test_export_endpoint_requires_a_site_key(client):
+def test_endpoints_default_the_site_key(client, monkeypatch):
+    from ibx_kentik_prepop.web import server as web
+
+    seen = {}
+
+    def fake_build_plan(config, kentik):
+        seen['site_key'] = config.site.site_key
+        return _one_site_plan()
+
+    monkeypatch.setattr(web, 'build_plan', fake_build_plan)
     response = client.post('/api/export', json={'source': 'uddi'})
-    assert response.status_code == 400
-    assert 'site EA/tag' in response.get_json()['error']
+
+    assert response.status_code == 200
+    assert seen['site_key'] == 'Site'
 
 
 def test_export_endpoint_returns_named_artefacts(client, monkeypatch):

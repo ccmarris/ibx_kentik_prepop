@@ -110,7 +110,9 @@ DEFAULT_CREDENTIAL_LIST = '/credential/v202407alpha1/group'
 DEFAULT_AUTH_EMAIL_HEADER = 'X-CH-Auth-Email'
 DEFAULT_AUTH_TOKEN_HEADER = 'X-CH-Auth-API-Token'
 
-# Site derivation defaults
+# Site derivation defaults. 'Site' is the conventional EA/tag name, so it is
+# the default rather than something the operator has to supply every time.
+DEFAULT_SITE_KEY = 'Site'
 DEFAULT_SITE_TYPE = 'SITE_TYPE_BRANCH'
 DEFAULT_CLASS_KEY = ''
 DEFAULT_MAX_PREFIX_LEN = 0
@@ -248,7 +250,7 @@ class SiteConfig:
     '''
     How sites, classifications and summarisation are derived from source data
     '''
-    site_key: str = ''
+    site_key: str = DEFAULT_SITE_KEY
     class_key: str = DEFAULT_CLASS_KEY
     site_type_key: str = ''
     default_site_type: str = DEFAULT_SITE_TYPE
@@ -596,7 +598,9 @@ def build_config(args, ini_file: str = '', yaml_file: str = '') -> ProjectConfig
         geo_keys[field_name] = _as_tuple(override) or candidates
 
     site = SiteConfig(
-        site_key=str(getattr(args, 'site_key', None) or site_yaml.get('site_key', '')).strip(),
+        site_key=(str(getattr(args, 'site_key', None)
+                      or site_yaml.get('site_key', '')).strip()
+                  or DEFAULT_SITE_KEY),
         class_key=str(getattr(args, 'class_key', None) or site_yaml.get('class_key', '')).strip(),
         site_type_key=str(getattr(args, 'site_type_key', None)
                           or site_yaml.get('site_type_key', '')).strip(),
@@ -744,8 +748,6 @@ def validate_source_credentials(config: ProjectConfig) -> list:
     else:
         if not config.uddi.api_key:
             problems.append('UDDI API key is not set ([UDDI] api_key)')
-    if not config.site.site_key:
-        problems.append('No site EA/tag key selected (--site-key)')
     if config.task == 'devices' and not (config.device.use_insight
                                          or config.device.use_uai
                                          or config.device.use_gateways):
