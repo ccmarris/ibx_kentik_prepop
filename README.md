@@ -316,10 +316,37 @@ own default.
 
 The agent is attached through the device's `nms` block, which is the only agent
 field the device API has — the portal surfaces it as the *Collection Agent* on a
-device's SNMP tab. One field remains **VERIFY**: `flow_snmp_credential_name`
-looks like it may also be set for agent-based flow SNMP, but the API documents
-it as alphanumeric-only (a hyphenated credential name would be rejected), so it
-is only sent when explicitly configured as `device.flow_snmp_credential_name`.
+device's SNMP tab.
+
+**`device_snmp_ip` and `device_snmp_community` are the legacy configuration** —
+Kentik polling the device itself — and sending either of them alongside the
+agent block makes the portal report the device as using the legacy method. They
+are therefore only sent in `community` mode; in the agent modes the poll target
+is `nms.ip_address` and nothing else.
+
+`flow_snmp_credential_name` is sent in the agent modes, defaulting to the
+selected credential, on the reading that "Credential for Flow Snmp peering" is
+the flow-side credential. It remains **VERIFY**: the API documents the field as
+alphanumeric-only, so a hyphenated credential name may be rejected. Set
+`device.send_flow_snmp_credential: false` to omit it, or
+`device.flow_snmp_credential_name` to send a different value.
+
+### Settling what the portal writes
+
+When a setting does not come out as expected, read a device back rather than
+guessing:
+
+```bash
+# configure one device by hand in the portal, then:
+./ibx_kentik_prepop.py -c ibx_kentik.ini --show-device lon_rtr_01
+```
+
+That prints the SNMP and agent fields first — `device_agent_type`,
+`snmp_enabled`, `device_snmp_ip`, `flow_snmp_credential_name`,
+`monitoring_template_id`, `nms` — then the whole device as Kentik holds it.
+Comparing that against what the tool sends is the fastest way to pin a mapping,
+and several of the fields in that list are read-only, so they show what Kentik
+decided rather than what was asked for.
 
 **The licence plan.** Plans are read from `GET /api/v5/plans` and resolved by
 name — **`Free Flowpak Plan`** by default (Kentik's no-cost flow plan), matched

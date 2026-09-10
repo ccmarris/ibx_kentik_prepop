@@ -48,6 +48,7 @@ __author_email__ = 'chris@infoblox.com'
 __license__ = 'BSD'
 
 import argparse
+import json
 import logging
 import sys
 from ibx_kentik_prepop import export, report
@@ -91,6 +92,9 @@ def parseargs():
                                                 'Kentik site type')
     parser.add_argument('--list-keys', action='store_true',
                         help='list the EA/tag keys in use with counts and exit')
+    parser.add_argument('--show-device', metavar='NAME', default=None,
+                        help='read one device back from Kentik and print it, to '
+                             'see exactly what the portal stored')
     parser.add_argument('--network-view', help='NIOS network view to restrict to')
     parser.add_argument('--ip-space', help='UDDI IP space id to restrict to')
     parser.add_argument('--site-filter', help='glob restricting which sites are planned')
@@ -220,6 +224,47 @@ def list_keys(config) -> int:
     return EXIT_OK
 
 
+def show_device(config, name: str) -> int:
+    '''
+    Print a device as Kentik holds it
+
+    The way to settle what the portal writes for a given setting: configure one
+    device by hand, read it back with this, and compare against what the tool
+    sends. The SNMP and agent fields are listed first because they are the ones
+    that decide the collection method.
+
+    Parameters:
+        config (ProjectConfig): assembled configuration
+        name (str): Kentik device name
+
+    Returns:
+        int: exit code
+    '''
+    exitcode = EXIT_OK
+    kentik = KENTIK(config)
+    device = kentik.get_device_by_name(name)
+
+    if not device:
+        print(f'Device {name!r} was not found in Kentik. '
+              f'{kentik.error_text()}'.strip(), file=sys.stderr)
+        exitcode = EXIT_FAILED
+    else:
+        interesting = ('device_name', 'id', 'device_subtype', 'device_flow_type',
+                       'device_agent_type', 'snmp_enabled',
+                       'snmp_disabled_reason', 'device_snmp_ip',
+                       'device_snmp_community', 'device_snmp_v3_conf_enabled',
+                       'minimize_snmp', 'flow_snmp_credential_name',
+                       'monitoring_template_id', 'nms')
+        print(f'SNMP and agent configuration of {name!r}:')
+        for field in interesting:
+            if field in device:
+                print(f'  {field:32} {json.dumps(device[field])}')
+        print('\nFull device as Kentik holds it:')
+        print(json.dumps(device, indent=2, sort_keys=True))
+
+    return exitcode
+
+
 def emit(text: str, output: str, outfile: str) -> None:
     '''
     Print the rendered report, or confirm the files written
@@ -266,6 +311,14 @@ def main() -> int:
                 print(f'ERROR: {problem}', file=sys.stderr)
             return EXIT_CONFIG
         return list_keys(config)
+
+    if args.show_device:
+        problems = validate_kentik_credentials(config)
+        if problems:
+            for problem in problems:
+                print(f'ERROR: {problem}', file=sys.stderr)
+            return EXIT_CONFIG
+        return show_device(config, args.show_device)
 
     problems = validate_source_credentials(config)
     if problems:

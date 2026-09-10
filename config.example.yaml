@@ -116,9 +116,12 @@ device:
   # Only used with snmp_mode: community. Kept out of the web UI deliberately.
   snmp_community: ''
 
-  # VERIFY: the portal may also set this for agent-based flow SNMP. Only sent
-  # when set here, because the API documents it as alphanumeric only.
+  # The flow-side SNMP credential, sent in the agent modes and defaulting to
+  # credential_name below. VERIFY: the API documents it as alphanumeric only,
+  # so a hyphenated credential name may be rejected - set this to an
+  # alphanumeric name, or set send_flow_snmp_credential to false to omit it.
   flow_snmp_credential_name: ''
+  send_flow_snmp_credential: true
 
   agent_id: ''
   credential_name: ''

@@ -60,7 +60,6 @@ def test_device_payload_sanitises_the_name_and_omits_plan_id():
     assert body['device_subtype'] == 'router'
     assert body['sending_ips'] == ['10.1.0.1']
     assert body['site_id'] == 42
-    assert body['device_snmp_ip'] == '10.1.0.1'
     assert 'plan_id' not in body
 
 
@@ -113,33 +112,62 @@ def test_flow_device_with_agent_based_snmp_for_full_monitoring():
     assert body['device_subtype'] == 'router'
 
 
-def test_snmp_modes_none_and_community():
+def test_snmp_mode_none_sends_no_snmp_configuration_at_all():
     device = Device(name='lon-rtr-01', mgmt_ip='10.1.0.1', role='router')
-
     bare = KENTIK(device_config()).device_payload(device)['device']
-    assert 'nms' not in bare and 'device_snmp_community' not in bare
-    assert bare['device_snmp_ip'] == '10.1.0.1'
 
+    assert 'nms' not in bare
+    assert 'device_snmp_ip' not in bare
+    assert 'device_snmp_community' not in bare
+
+
+def test_community_mode_is_the_only_one_sending_the_legacy_fields():
+    device = Device(name='lon-rtr-01', mgmt_ip='10.1.0.1', role='router')
     community = KENTIK(device_config(snmp_mode='community',
                                      snmp_community='public')
                        ).device_payload(device)['device']
+
+    assert community['device_snmp_ip'] == '10.1.0.1'
     assert community['device_snmp_community'] == 'public'
     assert 'nms' not in community
 
 
-def test_flow_snmp_credential_is_only_sent_when_configured():
+def test_agent_modes_never_send_the_legacy_snmp_fields():
+    '''
+    device_snmp_ip/community are Kentik polling the device itself. Sending
+    either alongside the agent block makes the portal show the device as using
+    the legacy method, which is the bug this pins.
+    '''
+    device = Device(name='lon-rtr-01', mgmt_ip='10.1.0.1', role='router')
+
+    for mode in ('agent-flow', 'agent-full'):
+        body = KENTIK(device_config(snmp_mode=mode, agent_id='agent-1',
+                                    credential_name='snmpro')
+                      ).device_payload(device)['device']
+        assert 'device_snmp_ip' not in body, mode
+        assert 'device_snmp_community' not in body, mode
+        assert body['nms']['ip_address'] == '10.1.0.1', mode
+
+
+def test_flow_snmp_credential_defaults_to_the_selected_credential():
     device = Device(name='lon-rtr-01', mgmt_ip='10.1.0.1', role='router')
 
     default = KENTIK(device_config(snmp_mode='agent-flow', agent_id='a',
-                                   credential_name='snmp-ro')
+                                   credential_name='snmpro')
                      ).device_payload(device)['device']
-    assert 'flow_snmp_credential_name' not in default
+    assert default['flow_snmp_credential_name'] == 'snmpro'
 
-    explicit = KENTIK(device_config(snmp_mode='agent-flow', agent_id='a',
+    override = KENTIK(device_config(snmp_mode='agent-flow', agent_id='a',
                                     credential_name='snmp-ro',
                                     flow_snmp_credential_name='snmpro')
                       ).device_payload(device)['device']
-    assert explicit['flow_snmp_credential_name'] == 'snmpro' 
+    assert override['flow_snmp_credential_name'] == 'snmpro'
+
+    suppressed = KENTIK(device_config(snmp_mode='agent-flow', agent_id='a',
+                                      credential_name='snmpro',
+                                      send_flow_snmp_credential=False)
+                        ).device_payload(device)['device']
+    assert 'flow_snmp_credential_name' not in suppressed
 
 
 def test_sending_ips_policy_and_per_device_override():

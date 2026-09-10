@@ -181,12 +181,14 @@ def build_device_payload(config, device: Device, site_id: str = '') -> dict:
         body['minimize_snmp'] = config.device.minimize_snmp
         if config.device.plan_id:
             body['plan_id'] = config.device.plan_id
-        if device.mgmt_ip:
-            body['device_snmp_ip'] = device.mgmt_ip
 
-    # SNMP collection is orthogonal to what the device is for. An agent polling
-    # a traffic device is the portal's "Agent-based SNMP for Flow Enrichment";
-    # the same block is how an NMS device collects metrics.
+    # SNMP collection is orthogonal to what the device is for: an agent polling
+    # a traffic device is the portal's "Agent-based SNMP for Flow Enrichment".
+    #
+    # device_snmp_ip and device_snmp_community are the LEGACY configuration -
+    # Kentik polling the device itself. Sending either of them alongside the
+    # agent block makes the portal show the device as using the legacy method,
+    # so in agent modes the poll target is nms.ip_address and nothing else.
     if config.device.snmp_mode in AGENT_SNMP_MODES:
         nms = {'ip_address': device.mgmt_ip}
         if config.device.agent_id:
@@ -195,15 +197,20 @@ def build_device_payload(config, device: Device, site_id: str = '') -> dict:
             nms['snmp'] = {'credential_name': config.device.credential_name,
                            'port': config.device.snmp_port}
         body['nms'] = nms
-        # VERIFY per tenant: the portal may also set this for agent-based flow
-        # SNMP. It is only sent when explicitly configured, because the API
-        # documents it as alphanumeric-only and a hyphenated credential name
-        # would be rejected.
-        if config.device.flow_snmp_credential_name:
-            body['flow_snmp_credential_name'] = \
-                config.device.flow_snmp_credential_name
-    elif config.device.snmp_mode == 'community' and config.device.snmp_community:
-        body['device_snmp_community'] = config.device.snmp_community
+
+        # The flow-side SNMP credential. VERIFY per tenant: this is the field
+        # the naming points at for agent-based flow SNMP, but the API documents
+        # it as alphanumeric-only, so a hyphenated credential name may be
+        # rejected. Set device.send_flow_snmp_credential to false to omit it.
+        flow_credential = (config.device.flow_snmp_credential_name
+                           or config.device.credential_name)
+        if flow_credential and config.device.send_flow_snmp_credential:
+            body['flow_snmp_credential_name'] = flow_credential
+    elif config.device.snmp_mode == 'community':
+        if device.mgmt_ip:
+            body['device_snmp_ip'] = device.mgmt_ip
+        if config.device.snmp_community:
+            body['device_snmp_community'] = config.device.snmp_community
 
     # The monitoring template governs the full metric set, so it only applies
     # when the agent is doing full monitoring rather than flow enrichment.
@@ -520,6 +527,27 @@ class KENTIK:
         '''
         path = self.kentik.device_read.format(device_id=device_id)
         url = f'{self.kentik.grpc_base_url}{path}'
+        payload = self._request('GET', url)
+        device = None
+        if isinstance(payload, dict):
+            device = payload.get('device', payload)
+        return device
+
+    def get_device_by_name(self, device_name: str) -> dict:
+        '''
+        Read one device from Kentik by its name
+
+        Useful for settling what the portal writes: configure a device by hand,
+        then read it back and compare with what this tool would send.
+
+        Parameters:
+            device_name (str): the Kentik device name
+
+        Returns:
+            dict: raw device dict, or None when not found
+        '''
+        url = (f'{self.kentik.grpc_base_url}{self.kentik.device_list}'
+               f'/name/{device_name}')
         payload = self._request('GET', url)
         device = None
         if isinstance(payload, dict):

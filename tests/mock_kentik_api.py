@@ -259,6 +259,12 @@ class Handler(BaseHTTPRequestHandler):
             self._send({'credentials': CREDENTIALS})
         elif path == '/device/v202504beta2/device':
             self._send({'devices': DEVICES})
+        elif path.startswith('/device/v202504beta2/device/name/'):
+            name = path.rsplit('/', 1)[1]
+            match = next((d for d in DEVICES
+                          if str(d.get('device_name')) == name), None)
+            self._send({'device': match} if match else {'error': 'not found'},
+                       200 if match else 404)
         elif re.match(r'/device/v202504beta2/device/\w+$', path):
             device_id = path.rsplit('/', 1)[1]
             match = next((d for d in DEVICES if str(d['id']) == device_id), None)

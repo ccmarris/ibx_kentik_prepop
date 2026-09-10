@@ -283,6 +283,7 @@ class DeviceConfig:
     snmp_mode: str = DEFAULT_SNMP_MODE
     snmp_community: str = ''
     flow_snmp_credential_name: str = ''
+    send_flow_snmp_credential: bool = True
     sending_ips: str = DEFAULT_SENDING_IPS
     sending_ip_map: dict = field(default_factory=dict)
     bgp_type: str = DEFAULT_BGP_TYPE
@@ -669,6 +670,8 @@ def build_config(args, ini_file: str = '', yaml_file: str = '') -> ProjectConfig
         snmp_community=str(device_yaml.get('snmp_community', '')),
         flow_snmp_credential_name=str(
             device_yaml.get('flow_snmp_credential_name', '')),
+        send_flow_snmp_credential=_as_bool(
+            device_yaml.get('send_flow_snmp_credential'), True),
         sending_ips=sending_ips,
         sending_ip_map=dict(getattr(args, 'sending_ip_map', None) or {}),
         bgp_type=bgp_type,
