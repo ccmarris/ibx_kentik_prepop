@@ -124,9 +124,24 @@ def build_device_payload(config, device: Device, site_id: str = '') -> dict:
         'device_name': sanitise_device_name(device.name),
         'device_description': ' '.join(v for v in (device.vendor, device.model,
                                                    device.os_version) if v),
+        # Required by the API even when BGP is not in use, in which case 'none'
+        # means "use generic IP/ASN mapping". device_bgp_flowspec is the
+        # boolean that accompanies it.
+        'device_bgp_type': config.device.bgp_type or 'none',
+        'device_bgp_flowspec': bool(config.device.bgp_flowspec),
     }
     if site_id:
         body['site_id'] = int(site_id) if str(site_id).isdigit() else site_id
+
+    if config.device.bgp_type == 'device':
+        if config.device.bgp_neighbor_asn:
+            body['device_bgp_neighbor_asn'] = str(config.device.bgp_neighbor_asn)
+        if config.device.bgp_neighbor_ip:
+            body['device_bgp_neighbor_ip'] = config.device.bgp_neighbor_ip
+        if config.device.bgp_neighbor_ip6:
+            body['device_bgp_neighbor_ip6'] = config.device.bgp_neighbor_ip6
+    elif config.device.bgp_type == 'other_device' and config.device.bgp_device_id:
+        body['use_bgp_device_id'] = config.device.bgp_device_id
 
     if config.device.mode == MODE_NMS:
         nms = {'ip_address': device.mgmt_ip}

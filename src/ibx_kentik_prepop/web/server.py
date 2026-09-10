@@ -93,13 +93,15 @@ app = Flask(__name__,
 # Boolean form fields, mapped to their CLI flag
 FLAG_FIELDS = ('include_address_blocks', 'devices',
                'use_insight', 'use_uai', 'use_gateways', 'update_devices',
-               'allow_over_capacity')
+               'allow_over_capacity', 'bgp_flowspec')
 
 # String/int form fields, mapped to their CLI option
 VALUE_FIELDS = ('task', 'source', 'site_key', 'class_key', 'site_type_key',
                 'network_view', 'ip_space', 'site_filter', 'max_prefix_len',
                 'device_mode', 'sending_ips', 'plan_name', 'plan_id',
-                'agent_id', 'credential_name', 'monitoring_template_id')
+                'agent_id', 'credential_name', 'monitoring_template_id',
+                'bgp_type', 'bgp_neighbor_asn', 'bgp_neighbor_ip',
+                'bgp_neighbor_ip6', 'bgp_device_id')
 
 
 def resolve_config_file(requested: str) -> tuple:

@@ -85,6 +85,16 @@ device:
   # interface address. Override per device in the web UI.
   sending_ips: mgmt
 
+  # Kentik requires device_bgp_type on every create. 'none' means generic
+  # IP/ASN mapping and needs nothing else; 'device' needs an ASN and a peering
+  # address; 'other_device' needs the id of the device whose table is shared.
+  bgp_type: none
+  bgp_flowspec: false
+  bgp_neighbor_asn: ''
+  bgp_neighbor_ip: ''
+  bgp_neighbor_ip6: ''
+  bgp_device_id: ''
+
   # NMS only. An agent is required - a device created without one never polls.
   agent_id: ''
   credential_name: ''

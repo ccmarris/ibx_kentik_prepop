@@ -269,6 +269,20 @@ populated:
 | `flow` | `device_subtype`, `plan_id`, `sending_ips`, `device_sample_rate`, `minimize_snmp`, `device_snmp_ip` |
 | `nms` | `nms{agent_id, ip_address, snmp{credential_name, port}}`, `monitoring_template_id` |
 
+**BGP.** Kentik requires `device_bgp_type` on every device create, so it is
+always sent — `none` by default, meaning "use generic IP/ASN mapping". The
+accompanying boolean `device_bgp_flowspec` is sent as `false` by default. Both
+are selectable (`--bgp-type`, `--bgp-flowspec`, or the controls in the UI):
+
+| `--bgp-type` | Meaning | Also required |
+|---|---|---|
+| `none` (default) | generic IP/ASN mapping | nothing |
+| `device` | peer with the device itself | `--bgp-neighbor-asn` and `--bgp-neighbor-ip` and/or `--bgp-neighbor-ip6` |
+| `other_device` | share an already-peered device's routing table | `--bgp-device-id` |
+
+The dependent fields are checked before anything is written, so a missing ASN
+is a refusal up front rather than a 400 from the API halfway through a run.
+
 NMS **requires an agent** (`--agent-id`, or the dropdown in the UI, populated
 from `GET /kagent/v202401/agents`): a device created without one never polls, so
 the apply refuses. SNMP credentials come from
@@ -398,9 +412,37 @@ python3 -m pytest -q
 ```
 
 No network access required — the suite covers summarisation, classification,
-name sanitisation against Kentik's 4–60 alphanumeric/underscore device name
-rule, the create/update/no-change diff, apply behaviour, and the report
+address/geo extraction, interface-to-site matching, plan resolution and
+capacity, device payloads per mode, exclusions, apply behaviour and the report
 renderers.
+
+### Testing the whole thing offline
+
+`tests/mock_kentik_api.py` is a standalone mock of both APIs — UDDI IPAM and
+asset search on one side, and the Kentik site, plan, agent, credential and
+device endpoints on the other. It reproduces the behaviours that matter:
+
+- a site `PUT` **merges** the subnet lists, so the hand-added prefix it seeds
+  survives an update;
+- a device create is **rejected without `device_bgp_type`**, exactly as the real
+  API does;
+- the free plan has four device slots against six device candidates, so the
+  capacity guard is exercised.
+
+```bash
+cp tests/mock.ini.example tests/mock.ini
+python3 tests/mock_kentik_api.py &
+
+./ibx_kentik_prepop.py -c tests/mock.ini --site-key Site --go
+./ibx_kentik_prepop.py -c tests/mock.ini --task devices --site-key Site --use-uai \
+    --exclude-device lon-sw-03 --exclude-device nyc-rtr-02 --go
+
+curl -s localhost:8899/device/v202504beta2/device | python3 -m json.tool
+```
+
+`GET /_calls` on the mock returns every request it received, if you want to
+assert on exactly what was sent. The web UI can be pointed at it the same way:
+`./web_server.py -c tests/mock.ini`.
 
 ## Not in scope
 

@@ -237,6 +237,30 @@ a { color: var(--ibx-green); text-decoration: underline; }
             <p class="hint"><a href="#" id="load_nms">Load agents and credentials</a></p>
           </div>
 
+          <label for="bgp_type">BGP (device_bgp_type)</label>
+          <select id="bgp_type">
+            <option value="none">None — generic IP/ASN mapping</option>
+            <option value="device">Device — peer with the device itself</option>
+            <option value="other_device">Other device — share a peered device's table</option>
+          </select>
+          <p class="hint">Kentik requires this field. None is the default and needs nothing else.</p>
+          <div class="check"><input type="checkbox" id="bgp_flowspec"><label for="bgp_flowspec">BGP flowspec (device_bgp_flowspec)</label></div>
+
+          <div id="bgp_device_fields" class="hidden">
+            <label for="bgp_neighbor_asn">Your ASN (required)</label>
+            <input type="text" id="bgp_neighbor_asn" placeholder="65001">
+            <label for="bgp_neighbor_ip">Your IPv4 peering address</label>
+            <input type="text" id="bgp_neighbor_ip" placeholder="10.0.0.1">
+            <label for="bgp_neighbor_ip6">Your IPv6 peering address</label>
+            <input type="text" id="bgp_neighbor_ip6" placeholder="2001:db8::1">
+            <p class="hint">An IPv4 and/or IPv6 address is required.</p>
+          </div>
+
+          <div id="bgp_other_fields" class="hidden">
+            <label for="bgp_device_id">Master BGP device id (required)</label>
+            <input type="text" id="bgp_device_id">
+          </div>
+
           <div class="check"><input type="checkbox" id="update_devices"><label for="update_devices">Update site / sending IPs of devices already in Kentik</label></div>
           <div class="check"><input type="checkbox" id="allow_over_capacity"><label for="allow_over_capacity">Allow more devices than the plan has slots for</label></div>
         </div>

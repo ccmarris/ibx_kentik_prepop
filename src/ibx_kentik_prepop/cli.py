@@ -116,6 +116,21 @@ def parseargs():
                              "(default: 'Free Flowpak Plan')")
     parser.add_argument('--plan-id', type=int, default=None,
                         help='Kentik plan id, overriding --plan-name')
+    parser.add_argument('--bgp-type', choices=['none', 'device', 'other_device'],
+                        default=None,
+                        help="device_bgp_type, required by Kentik (default: "
+                             "none, meaning generic IP/ASN mapping)")
+    parser.add_argument('--bgp-flowspec', action='store_true',
+                        help='set device_bgp_flowspec (default: false)')
+    parser.add_argument('--bgp-neighbor-asn', default=None,
+                        help="your ASN, required when --bgp-type is 'device'")
+    parser.add_argument('--bgp-neighbor-ip', default=None,
+                        help="your IPv4 peering address, for --bgp-type 'device'")
+    parser.add_argument('--bgp-neighbor-ip6', default=None,
+                        help="your IPv6 peering address, for --bgp-type 'device'")
+    parser.add_argument('--bgp-device-id', default=None,
+                        help="id of the device to share a BGP table with, "
+                             "required when --bgp-type is 'other_device'")
     parser.add_argument('--agent-id', default=None,
                         help='Kentik agent id for NMS devices (required for NMS)')
     parser.add_argument('--credential-name', default=None,

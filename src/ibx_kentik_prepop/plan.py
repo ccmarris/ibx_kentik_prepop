@@ -474,6 +474,17 @@ def device_apply_problems(config, plan) -> list:
     if config.device.mode == MODE_NMS and not config.device.agent_id:
         problems.append('NMS mode needs an agent to be selected')
 
+    if creates and config.device.bgp_type == 'device':
+        if not config.device.bgp_neighbor_asn:
+            problems.append("BGP type 'device' requires your ASN")
+        if not (config.device.bgp_neighbor_ip or config.device.bgp_neighbor_ip6):
+            problems.append("BGP type 'device' requires an IPv4 and/or IPv6 "
+                            'peering address')
+    if (creates and config.device.bgp_type == 'other_device'
+            and not config.device.bgp_device_id):
+        problems.append("BGP type 'other_device' requires the id of the device "
+                        'whose BGP table is shared')
+
     if config.device.mode == MODE_FLOW and creates and not plan.plan_id:
         problems.append('No licence plan id - the API did not return one, so '
                         'enter the plan id manually')

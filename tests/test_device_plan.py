@@ -317,3 +317,28 @@ def test_free_plan_is_preferred_over_the_first_active(monkeypatch):
                     monkeypatch=monkeypatch)
 
     assert plan.plan_id == 4
+
+
+def test_bgp_device_type_requires_asn_and_a_peering_address(monkeypatch):
+    plan, config = build(config=device_config(bgp_type='device'),
+                         kentik=FakeKentik(), monkeypatch=monkeypatch)
+    problems = device_apply_problems(config, plan)
+
+    assert any('requires your ASN' in p for p in problems)
+    assert any('peering address' in p for p in problems)
+
+    complete = replace(config, device=replace(config.device,
+                                              bgp_neighbor_asn='65001',
+                                              bgp_neighbor_ip='10.0.0.1'))
+    assert device_apply_problems(complete, plan) == []
+
+
+def test_bgp_other_device_requires_a_master_device_id(monkeypatch):
+    plan, config = build(config=device_config(bgp_type='other_device'),
+                         kentik=FakeKentik(), monkeypatch=monkeypatch)
+
+    assert any('BGP table is shared' in p
+               for p in device_apply_problems(config, plan))
+
+    complete = replace(config, device=replace(config.device, bgp_device_id='500'))
+    assert device_apply_problems(complete, plan) == []

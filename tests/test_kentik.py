@@ -205,3 +205,59 @@ def test_resolve_plan_with_no_plans_and_no_id():
 
     assert capacity is None
     assert 'no active plan' in warning
+
+
+def test_device_payload_always_carries_the_required_bgp_type():
+    device = Device(name='lon-rtr-01', mgmt_ip='10.1.0.1', role='router')
+    body = target().device_payload(device)['device']
+
+    assert body['device_bgp_type'] == 'none'
+    assert body['device_bgp_flowspec'] is False
+    assert 'device_bgp_neighbor_asn' not in body
+
+
+def test_nms_payload_also_carries_the_bgp_type():
+    from dataclasses import replace
+    from conftest import make_config as base_config
+    config = base_config()
+    config = replace(config, device=replace(config.device, mode='nms',
+                                            agent_id='agent-1'))
+    body = KENTIK(config).device_payload(Device(name='lon-sw-01'))['device']
+
+    assert body['device_bgp_type'] == 'none'
+
+
+def test_bgp_flowspec_is_selectable():
+    from dataclasses import replace
+    from conftest import make_config as base_config
+    config = base_config()
+    config = replace(config, device=replace(config.device, bgp_flowspec=True))
+    body = KENTIK(config).device_payload(Device(name='lon-rtr-01'))['device']
+
+    assert body['device_bgp_flowspec'] is True
+
+
+def test_device_payload_includes_the_bgp_peering_details():
+    from dataclasses import replace
+    from conftest import make_config as base_config
+    config = base_config()
+    config = replace(config, device=replace(config.device, bgp_type='device',
+                                            bgp_neighbor_asn='65001',
+                                            bgp_neighbor_ip='10.0.0.1'))
+    body = KENTIK(config).device_payload(Device(name='lon-rtr-01'))['device']
+
+    assert body['device_bgp_type'] == 'device'
+    assert body['device_bgp_neighbor_asn'] == '65001'
+    assert body['device_bgp_neighbor_ip'] == '10.0.0.1'
+
+
+def test_device_payload_shares_another_devices_bgp_table():
+    from dataclasses import replace
+    from conftest import make_config as base_config
+    config = base_config()
+    config = replace(config, device=replace(config.device,
+                                            bgp_type='other_device',
+                                            bgp_device_id='500'))
+    body = KENTIK(config).device_payload(Device(name='lon-sw-01'))['device']
+
+    assert body['use_bgp_device_id'] == '500'

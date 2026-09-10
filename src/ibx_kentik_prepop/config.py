@@ -156,6 +156,15 @@ DEFAULT_SAMPLE_RATE = 1024
 DEFAULT_SENDING_IPS = 'mgmt'
 DEFAULT_SNMP_PORT = 161
 
+# device_bgp_type is a required string on the device API, not a boolean.
+# 'none' uses generic IP/ASN mapping and needs nothing else; 'device' peers with
+# the device itself and requires an ASN plus a peering address; 'other_device'
+# shares an already-peered device's routing table and requires that device's id.
+DEFAULT_BGP_TYPE = 'none'
+BGP_TYPES = ('none', 'device', 'other_device')
+# device_bgp_flowspec is the boolean that sits alongside it
+DEFAULT_BGP_FLOWSPEC = False
+
 DEFAULT_TIMEOUT = 30
 
 
@@ -249,6 +258,12 @@ class DeviceConfig:
     minimize_snmp: bool = True
     sending_ips: str = DEFAULT_SENDING_IPS
     sending_ip_map: dict = field(default_factory=dict)
+    bgp_type: str = DEFAULT_BGP_TYPE
+    bgp_flowspec: bool = DEFAULT_BGP_FLOWSPEC
+    bgp_neighbor_asn: str = ''
+    bgp_neighbor_ip: str = ''
+    bgp_neighbor_ip6: str = ''
+    bgp_device_id: str = ''
     agent_id: str = ''
     credential_name: str = ''
     snmp_port: int = DEFAULT_SNMP_PORT
@@ -581,6 +596,12 @@ def build_config(args, ini_file: str = '', yaml_file: str = '') -> ProjectConfig
     if sending_ips not in ('mgmt', 'all'):
         raise ValueError(f"sending_ips must be 'mgmt' or 'all', got {sending_ips!r}")
 
+    bgp_type = str(getattr(args, 'bgp_type', None)
+                   or device_yaml.get('bgp_type', DEFAULT_BGP_TYPE)).lower()
+    if bgp_type not in BGP_TYPES:
+        raise ValueError(f"bgp_type must be one of {', '.join(BGP_TYPES)}, "
+                         f'got {bgp_type!r}')
+
     exclude = list(_as_tuple(getattr(args, 'exclude_device', None)))
     exclude.extend(_as_tuple(device_yaml.get('exclude')))
     exclude_file = getattr(args, 'exclude_file', None)
@@ -607,6 +628,18 @@ def build_config(args, ini_file: str = '', yaml_file: str = '') -> ProjectConfig
         minimize_snmp=_as_bool(device_yaml.get('minimize_snmp'), True),
         sending_ips=sending_ips,
         sending_ip_map=dict(getattr(args, 'sending_ip_map', None) or {}),
+        bgp_type=bgp_type,
+        bgp_flowspec=_as_bool(getattr(args, 'bgp_flowspec', None)
+                              or device_yaml.get('bgp_flowspec'),
+                              DEFAULT_BGP_FLOWSPEC),
+        bgp_neighbor_asn=str(getattr(args, 'bgp_neighbor_asn', None)
+                             or device_yaml.get('bgp_neighbor_asn', '')),
+        bgp_neighbor_ip=str(getattr(args, 'bgp_neighbor_ip', None)
+                            or device_yaml.get('bgp_neighbor_ip', '')),
+        bgp_neighbor_ip6=str(getattr(args, 'bgp_neighbor_ip6', None)
+                             or device_yaml.get('bgp_neighbor_ip6', '')),
+        bgp_device_id=str(getattr(args, 'bgp_device_id', None)
+                          or device_yaml.get('bgp_device_id', '')),
         agent_id=str(getattr(args, 'agent_id', None) or device_yaml.get('agent_id', '')),
         credential_name=str(getattr(args, 'credential_name', None)
                             or device_yaml.get('credential_name', '')),

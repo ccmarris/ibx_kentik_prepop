@@ -1,0 +1,14 @@
+# Credentials for the offline mock (tests/mock_kentik_api.py). Copy to
+# mock.ini, start the mock, and point the tool at it:
+#   python3 tests/mock_kentik_api.py &
+#   ./ibx_kentik_prepop.py -c tests/mock.ini --site-key Site
+
+[UDDI]
+api_key = mock-key
+base_url = http://127.0.0.1:8899
+
+[KENTIK]
+email = tester@example.com
+token = mock-token
+base_url = http://127.0.0.1:8899
+grpc_base_url = http://127.0.0.1:8899

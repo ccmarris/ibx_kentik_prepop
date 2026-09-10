@@ -3,11 +3,13 @@
 const VALUE_FIELDS = ['config_file', 'source', 'site_key', 'class_key',
                       'site_type_key', 'network_view', 'ip_space', 'site_filter',
                       'max_prefix_len', 'export_prefix', 'device_mode',
-                      'sending_ips', 'plan_id', 'agent_id', 'credential_name'];
+                      'sending_ips', 'plan_id', 'agent_id', 'credential_name',
+                      'bgp_type', 'bgp_neighbor_asn', 'bgp_neighbor_ip',
+                      'bgp_neighbor_ip6', 'bgp_device_id'];
 const FLAG_FIELDS = ['include_address_blocks', 'devices',
                      'use_insight', 'use_uai', 'use_gateways',
                      'export_include_unchanged', 'update_devices',
-                     'allow_over_capacity'];
+                     'allow_over_capacity', 'bgp_flowspec'];
 
 let currentPlan = null;
 let currentTask = 'sites';
@@ -57,6 +59,12 @@ function updateDeviceMode() {
   const nms = el('device_mode').value === 'nms';
   el('flow_fields').classList.toggle('hidden', nms);
   el('nms_fields').classList.toggle('hidden', !nms);
+}
+
+function updateBgpType() {
+  const value = el('bgp_type').value;
+  el('bgp_device_fields').classList.toggle('hidden', value !== 'device');
+  el('bgp_other_fields').classList.toggle('hidden', value !== 'other_device');
 }
 
 function deviceDetail(entry) {
@@ -852,6 +860,16 @@ el('device_mode').addEventListener('change', function () {
     loadNms();
   }
 });
+el('bgp_type').addEventListener('change', function () {
+  updateBgpType();
+  invalidatePlan('BGP type changed');
+});
+['bgp_neighbor_asn', 'bgp_neighbor_ip', 'bgp_neighbor_ip6',
+ 'bgp_device_id', 'bgp_flowspec'].forEach(function (field) {
+  el(field).addEventListener('change', function () {
+    invalidatePlan('BGP settings changed');
+  });
+});
 el('load_plans').addEventListener('click', loadPlans);
 el('plan_select').addEventListener('change', function () {
   if (el('plan_select').value) { el('plan_id').value = el('plan_select').value; }
@@ -887,4 +905,5 @@ el('run_apply').addEventListener('click', runApply);
 loadConfig();
 loadInis();
 updateDeviceMode();
+updateBgpType();
 setTask('sites');
