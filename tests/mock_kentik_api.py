@@ -143,6 +143,44 @@ DEVICES = []
 CALLS = []
 
 
+def camel(name: str) -> str:
+    '''
+    lowerCamelCase form of a snake_case field name
+
+    Parameters:
+        name (str): snake_case field name
+
+    Returns:
+        str: camelCase spelling
+    '''
+    head, *rest = name.split('_')
+    return head + ''.join(part.title() for part in rest)
+
+
+def as_response(device: dict) -> dict:
+    '''
+    Render a stored device the way the API answers: lowerCamelCase, with the
+    read-only clutter a real response carries
+
+    Parameters:
+        device (dict): the stored device
+
+    Returns:
+        dict: response-shaped device
+    '''
+    response = {camel(k): v for k, v in device.items()}
+    response.setdefault('site', {'id': str(device.get('site_id', '') or ''),
+                                 'siteName': ''})
+    response.pop('siteId', None)
+    response['snmpEnabled'] = 'V2' if device.get('device_snmp_ip') else ''
+    response['deviceAgentType'] = ''
+    response['customColumns'] = 'STR17=13800,INET_75=120067'
+    response['createdDate'] = '2026-09-10T19:09:19.416Z'
+    response['labels'] = []
+    response['allInterfaces'] = []
+    return response
+
+
 def validate_device(device: dict) -> str:
     '''
     Reproduce the device validation the real API performs
@@ -258,18 +296,18 @@ class Handler(BaseHTTPRequestHandler):
         elif path == '/credential/v202407alpha1/group':
             self._send({'credentials': CREDENTIALS})
         elif path == '/device/v202504beta2/device':
-            self._send({'devices': DEVICES})
+            self._send({'devices': [as_response(d) for d in DEVICES]})
         elif path.startswith('/device/v202504beta2/device/name/'):
             name = path.rsplit('/', 1)[1]
             match = next((d for d in DEVICES
                           if str(d.get('device_name')) == name), None)
-            self._send({'device': match} if match else {'error': 'not found'},
-                       200 if match else 404)
+            self._send({'device': as_response(match)} if match
+                       else {'error': 'not found'}, 200 if match else 404)
         elif re.match(r'/device/v202504beta2/device/\w+$', path):
             device_id = path.rsplit('/', 1)[1]
             match = next((d for d in DEVICES if str(d['id']) == device_id), None)
-            self._send({'device': match} if match else {'error': 'not found'},
-                       200 if match else 404)
+            self._send({'device': as_response(match)} if match
+                       else {'error': 'not found'}, 200 if match else 404)
         elif path == '/_calls':
             self._send({'calls': CALLS})
         else:

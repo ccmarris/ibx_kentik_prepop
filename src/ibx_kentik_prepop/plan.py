@@ -65,7 +65,8 @@ from ibx_kentik_prepop.sources.uddi import UDDI
 from ibx_kentik_prepop.sources.uddi_uai import UAI
 from ibx_kentik_prepop.summarise import (build_sites, sanitise_device_name,
                                           site_match_key)
-from ibx_kentik_prepop.targets.kentik import sending_ips_for
+from ibx_kentik_prepop.targets.kentik import (device_site_id, read_field,
+                                              sending_ips_for)
 
 logger = logging.getLogger(__name__)
 
@@ -286,13 +287,13 @@ def device_mismatch(raw_device: dict, device, site_id: str, config) -> dict:
     '''
     mismatch = {}
 
-    current_site = str(raw_device.get('site_id')
-                       or (raw_device.get('site') or {}).get('id') or '')
+    current_site = device_site_id(raw_device)
     if site_id and current_site != str(site_id):
         mismatch['site_id'] = {'kentik': current_site, 'derived': str(site_id)}
 
     derived_ips = sending_ips_for(config, device)
-    current_ips = sorted(str(a) for a in (raw_device.get('sending_ips') or []))
+    current_ips = sorted(str(a) for a in (read_field(raw_device, 'sending_ips')
+                                          or []))
     if derived_ips and current_ips != sorted(derived_ips):
         mismatch['sending_ips'] = {'kentik': current_ips, 'derived': derived_ips}
 
@@ -433,7 +434,7 @@ def build_device_plan(config, kentik=None) -> tuple:
 
         raw_device = device_index.get(sanitise_device_name(device.name).casefold())
         if raw_device is not None:
-            entry.kentik_id = str(raw_device.get('id', ''))
+            entry.kentik_id = str(read_field(raw_device, 'id') or '')
             entry.mismatch = device_mismatch(raw_device, device, site_id, config)
             if entry.mismatch and config.device.update_existing:
                 entry.action = ACTION_UPDATE

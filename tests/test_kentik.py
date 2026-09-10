@@ -395,3 +395,78 @@ def test_device_payload_carries_the_description():
     body = target().device_payload(device)['device']
 
     assert body['device_description'] == 'Site edge router - Cisco ISR4451'
+
+
+# A device exactly as the API answers: lowerCamelCase, nested site and plan,
+# and a large read-only custom_columns string.
+REAL_DEVICE = {
+    'id': '696557',
+    'companyId': '238793',
+    'deviceName': '10_58_207_1',
+    'deviceType': 'router',
+    'deviceSubtype': 'router',
+    'deviceDescription': 'Default gateway for 10.58.207.0/25',
+    'site': {'id': '', 'siteName': '', 'lat': 0, 'lon': 0},
+    'plan': {'id': '132986', 'name': 'Free Flowpak Plan', 'maxDevices': 100},
+    'deviceSampleRate': '1',
+    'sendingIps': ['10.58.207.1'],
+    'deviceSnmpIp': '10.58.207.1',
+    'deviceSnmpCommunity': '',
+    'minimizeSnmp': True,
+    'deviceBgpType': 'none',
+    'deviceBgpFlowspec': False,
+    'customColumns': 'STR17=13800,INET_75=120067',
+    'snmpEnabled': 'V2',
+    'flowSnmpCredentialName': '',
+    'monitoringTemplateId': 0,
+    'createdDate': '2026-09-10T19:09:19.416Z',
+    'labels': [],
+    'allInterfaces': [],
+}
+
+
+def test_reads_tolerate_the_camelcase_the_api_answers_with():
+    from ibx_kentik_prepop.targets.kentik import (camel, device_site_id,
+                                                  read_field)
+
+    assert camel('device_snmp_ip') == 'deviceSnmpIp'
+    assert read_field(REAL_DEVICE, 'device_name') == '10_58_207_1'
+    assert read_field(REAL_DEVICE, 'sending_ips') == ['10.58.207.1']
+    assert read_field(REAL_DEVICE, 'snmp_enabled') == 'V2'
+    assert read_field(REAL_DEVICE, 'nms', '(absent)') == '(absent)'
+    # the site is nested and empty on this device
+    assert device_site_id(REAL_DEVICE) == ''
+    assert device_site_id({'site_id': 42}) == '42'
+    assert device_site_id({'site': {'id': '7'}}) == '7'
+
+
+def test_device_index_finds_camelcase_names():
+    index = target().device_index([REAL_DEVICE])
+    assert '10_58_207_1' in index
+
+
+def test_update_only_echoes_writable_fields(monkeypatch):
+    kentik = target()
+    sent = {}
+    monkeypatch.setattr(kentik, '_request',
+                        lambda method, url, body=None: sent.update(
+                            {'method': method, 'url': url, 'body': body})
+                        or {'device': {'id': '696557'}})
+
+    device = Device(name='10_58_207_1', mgmt_ip='10.58.207.1')
+    kentik.update_device_placement(REAL_DEVICE, device, site_id='42')
+    body = sent['body']['device']
+
+    # the read-only clutter never goes back
+    for junk in ('customColumns', 'custom_columns', 'plan', 'site', 'labels',
+                 'allInterfaces', 'companyId', 'createdDate', 'snmpEnabled',
+                 'deviceType', 'id'):
+        assert junk not in body, junk
+
+    # the fields we manage, plus the ones worth preserving
+    assert body['site_id'] == 42
+    assert body['sending_ips'] == ['10.58.207.1']
+    assert body['device_name'] == '10_58_207_1'
+    assert body['device_bgp_type'] == 'none'
+    assert body['device_sample_rate'] == '1'
+    assert sent['url'].endswith('/device/v202504beta2/device/696557')

@@ -348,6 +348,21 @@ Comparing that against what the tool sends is the fastest way to pin a mapping,
 and several of the fields in that list are read-only, so they show what Kentik
 decided rather than what was asked for.
 
+**`snmp_enabled` is the field to watch.** It is read-only and derived: a device
+carrying `device_snmp_ip` comes back as `snmpEnabled: "V2"`, which is what the
+portal reports as the legacy SNMP method — even when the community string is
+empty and nothing is actually being polled.
+
+### A note on field naming
+
+The device API accepts `snake_case` on writes but answers in
+`lowerCamelCase` (`deviceSnmpIp`, `sendingIps`, `flowSnmpCredentialName`), and
+the read model nests `site` and `plan` as objects. Every read in this tool goes
+through a spelling-tolerant lookup for that reason, and device updates are built
+from an explicit list of the fields the write message accepts — echoing a read
+response back would otherwise return `plan`, `site`, `labels` and a multi-kilobyte
+`customColumns` string to an endpoint that does not want them.
+
 **The licence plan.** Plans are read from `GET /api/v5/plans` and resolved by
 name — **`Free Flowpak Plan`** by default (Kentik's no-cost flow plan), matched
 case-insensitively with underscores and spaces treated as equivalent. If that

@@ -133,6 +133,18 @@ def test_device_mismatch_only_covers_derived_fields():
     assert mismatch['site_id'] == {'kentik': '9', 'derived': '42'}
 
 
+def test_device_mismatch_reads_the_camelcase_the_api_answers_with():
+    config = make_config()
+    device = Device(name='10_58_207_1', mgmt_ip='10.58.207.1')
+    raw = {'id': '696557', 'deviceName': '10_58_207_1',
+           'site': {'id': ''}, 'sendingIps': ['10.58.207.1']}
+
+    # the sending IPs agree, but Kentik has no site for it
+    mismatch = device_mismatch(raw, device, '42', config)
+    assert set(mismatch) == {'site_id'}
+    assert mismatch['site_id'] == {'kentik': '', 'derived': '42'}
+
+
 def test_build_device_plan_places_devices_and_resolves_the_plan(monkeypatch):
     kentik = FakeKentik()
     plan, config = build(kentik=kentik, monkeypatch=monkeypatch)

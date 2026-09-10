@@ -76,6 +76,72 @@ DEVICE_LICENCE_NOTE = (
 )
 
 
+# The device API accepts snake_case on input but answers in lowerCamelCase, so
+# every read of a device has to tolerate both spellings.
+WRITABLE_DEVICE_FIELDS = (
+    'device_name', 'device_subtype', 'cdn_attr', 'device_description',
+    'sending_ips', 'device_sample_rate', 'plan_id', 'site_id', 'minimize_snmp',
+    'device_snmp_ip', 'device_snmp_community', 'device_snmp_v3_conf',
+    'device_bgp_type', 'device_bgp_neighbor_ip', 'device_bgp_neighbor_ip6',
+    'device_bgp_neighbor_asn', 'device_bgp_password', 'use_bgp_device_id',
+    'device_bgp_flowspec', 'nms', 'flow_snmp_credential_name',
+    'monitoring_template_id', 'device_alert',
+)
+
+
+def camel(name: str) -> str:
+    '''
+    lowerCamelCase form of a snake_case field name
+
+    Parameters:
+        name (str): snake_case field name
+
+    Returns:
+        str: the camelCase spelling the API answers with
+    '''
+    head, *rest = name.split('_')
+    return head + ''.join(part.title() for part in rest)
+
+
+def read_field(raw: dict, name: str, default=None):
+    '''
+    Read a device field regardless of which spelling the API used
+
+    Parameters:
+        raw (dict): device dict as returned by the API
+        name (str): snake_case field name
+        default: value to return when the field is absent
+
+    Returns:
+        the field value, or the default
+    '''
+    if not isinstance(raw, dict):
+        return default
+    if name in raw:
+        return raw[name]
+    return raw.get(camel(name), default)
+
+
+def device_site_id(raw: dict) -> str:
+    '''
+    The site id a device currently carries
+
+    The read model nests the site as an object, so the flat site_id is not
+    always present.
+
+    Parameters:
+        raw (dict): device dict as returned by the API
+
+    Returns:
+        str: site id, empty string when the device has no site
+    '''
+    site_id = read_field(raw, 'site_id') or ''
+    if not site_id:
+        site = read_field(raw, 'site') or {}
+        site_id = site.get('id', '') if isinstance(site, dict) else ''
+    return str(site_id or '')
+
+
 def sending_ips_for(config, device: Device) -> list:
     '''
     Work out the flow exporter source addresses for a device
@@ -489,7 +555,7 @@ class KENTIK:
             devices = self.get_devices()
         index = {}
         for device in devices:
-            name = str(device.get('device_name') or device.get('deviceName') or '')
+            name = str(read_field(device, 'device_name') or '')
             if name:
                 index[name.casefold()] = device
         return index
@@ -571,13 +637,19 @@ class KENTIK:
         Returns:
             dict: updated device dict, or None on failure
         '''
-        device_id = str(raw_device.get('id', ''))
-        body = {k: v for k, v in raw_device.items()
-                if k not in ('id', 'created_date', 'updated_date', 'company_id',
-                             'device_status', 'interfaces', 'labels', 'plan',
-                             'site', 'custom_columns', 'cdn_attr')}
-        if site_id:
-            body['site_id'] = int(site_id) if str(site_id).isdigit() else site_id
+        device_id = str(read_field(raw_device, 'id') or '')
+
+        # Only the fields the API accepts on a write are echoed back. A
+        # blacklist is not safe here: the read model carries plan, site,
+        # interfaces and a huge custom_columns string, none of which belong in
+        # an update, and it names them in camelCase.
+        body = {}
+        for field in WRITABLE_DEVICE_FIELDS:
+            value = read_field(raw_device, field)
+            if value not in (None, ''):
+                body[field] = value
+        body['site_id'] = (int(site_id) if str(site_id).isdigit() else site_id) \
+            if site_id else device_site_id(raw_device)
         addresses = sending_ips_for(self.config, device)
         if addresses:
             body['sending_ips'] = addresses

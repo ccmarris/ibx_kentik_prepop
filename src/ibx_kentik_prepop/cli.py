@@ -255,10 +255,12 @@ def show_device(config, name: str) -> int:
                        'device_snmp_community', 'device_snmp_v3_conf_enabled',
                        'minimize_snmp', 'flow_snmp_credential_name',
                        'monitoring_template_id', 'nms')
+        from ibx_kentik_prepop.targets.kentik import camel, read_field
         print(f'SNMP and agent configuration of {name!r}:')
         for field in interesting:
-            if field in device:
-                print(f'  {field:32} {json.dumps(device[field])}')
+            value = read_field(device, field, '(absent)')
+            print(f'  {field:32} {json.dumps(value)}'
+                  f"{'' if field in device else f'   [{camel(field)}]'}")
         print('\nFull device as Kentik holds it:')
         print(json.dumps(device, indent=2, sort_keys=True))
 
