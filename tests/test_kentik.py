@@ -149,22 +149,30 @@ def test_agent_modes_never_send_the_legacy_snmp_fields():
         assert body['nms']['ip_address'] == '10.1.0.1', mode
 
 
-def test_flow_snmp_credential_defaults_to_the_selected_credential():
+def test_flow_snmp_credential_is_never_sent_by_default():
+    '''
+    A tenant rejected this field with "Expected a value of type `never`", so
+    the write schema forbids it - the agent credential belongs in
+    nms.snmp.credential_name only.
+    '''
     device = Device(name='lon-rtr-01', mgmt_ip='10.1.0.1', role='router')
 
-    default = KENTIK(device_config(snmp_mode='agent-flow', agent_id='a',
-                                   credential_name='snmpro')
-                     ).device_payload(device)['device']
-    assert default['flow_snmp_credential_name'] == 'snmpro'
-
-    override = KENTIK(device_config(snmp_mode='agent-flow', agent_id='a',
-                                    credential_name='snmp-ro',
-                                    flow_snmp_credential_name='snmpro')
+    for mode in ('agent-flow', 'agent-full'):
+        body = KENTIK(device_config(snmp_mode=mode, agent_id='a',
+                                    credential_name='snmpro')
                       ).device_payload(device)['device']
-    assert override['flow_snmp_credential_name'] == 'snmpro'
+        assert 'flow_snmp_credential_name' not in body, mode
+        assert body['nms']['snmp']['credential_name'] == 'snmpro', mode
+
+    # still possible to force, for the day Kentik accepts it
+    forced = KENTIK(device_config(snmp_mode='agent-flow', agent_id='a',
+                                  credential_name='snmpro',
+                                  flow_snmp_credential_name='snmpro')
+                    ).device_payload(device)['device']
+    assert forced['flow_snmp_credential_name'] == 'snmpro'
 
     suppressed = KENTIK(device_config(snmp_mode='agent-flow', agent_id='a',
-                                      credential_name='snmpro',
+                                      flow_snmp_credential_name='snmpro',
                                       send_flow_snmp_credential=False)
                         ).device_payload(device)['device']
     assert 'flow_snmp_credential_name' not in suppressed

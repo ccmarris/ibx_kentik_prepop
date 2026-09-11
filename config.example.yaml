@@ -122,10 +122,10 @@ device:
   # Only used with snmp_mode: community. Kept out of the web UI deliberately.
   snmp_community: ''
 
-  # The flow-side SNMP credential, sent in the agent modes and defaulting to
-  # credential_name below. VERIFY: the API documents it as alphanumeric only,
-  # so a hyphenated credential name may be rejected - set this to an
-  # alphanumeric name, or set send_flow_snmp_credential to false to omit it.
+  # NOT the field for agent SNMP: a tenant rejected it with "Expected a value
+  # of type `never`", so the device write schema forbids it. The agent's
+  # credential goes in credential_name below (nms.snmp.credential_name). Left
+  # empty, and nothing is sent unless you set it deliberately.
   flow_snmp_credential_name: ''
   send_flow_snmp_credential: true
 

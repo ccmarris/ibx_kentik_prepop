@@ -292,6 +292,8 @@ class DeviceConfig:
     minimize_snmp: bool = True
     snmp_mode: str = DEFAULT_SNMP_MODE
     snmp_community: str = ''
+    # Left empty deliberately: a tenant rejected this field with "Expected a
+    # value of type `never`", so the device write schema forbids it.
     flow_snmp_credential_name: str = ''
     send_flow_snmp_credential: bool = True
     sending_ips: str = DEFAULT_SENDING_IPS

@@ -341,12 +341,19 @@ agent block makes the portal report the device as using the legacy method. They
 are therefore only sent in `community` mode; in the agent modes the poll target
 is `nms.ip_address` and nothing else.
 
-`flow_snmp_credential_name` is sent in the agent modes, defaulting to the
-selected credential, on the reading that "Credential for Flow Snmp peering" is
-the flow-side credential. It remains **VERIFY**: the API documents the field as
-alphanumeric-only, so a hyphenated credential name may be rejected. Set
-`device.send_flow_snmp_credential: false` to omit it, or
-`device.flow_snmp_credential_name` to send a different value.
+**`flow_snmp_credential_name` is not the field for this, and is never sent.**
+The name suggested it was the flow-side credential, but a tenant rejected it
+outright:
+
+```
+400 At path: request.device.flow_snmp_credential_name --
+    Expected a value of type `never`, but received: `"marrison-test"`
+```
+
+A `never` type means the write schema forbids it, so the agent's credential
+goes in `nms.snmp.credential_name` and nowhere else. `device.flow_snmp_credential_name`
+still exists as an escape hatch should Kentik ever accept it, but setting it
+will almost certainly be rejected.
 
 ### Settling what the portal writes
 

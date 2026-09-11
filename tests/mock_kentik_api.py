@@ -194,6 +194,12 @@ def validate_device(device: dict) -> str:
     error = ''
     bgp_type = device.get('device_bgp_type')
 
+    # A real tenant rejects this field outright, whatever its value.
+    if device.get('flow_snmp_credential_name'):
+        return ('At path: request.device.flow_snmp_credential_name -- Expected '
+                'a value of type `never`, but received: '
+                f'`"{device["flow_snmp_credential_name"]}"`')
+
     if not bgp_type:
         error = ('internal validation (device_bgp_type: The device_bgp_type '
                  'is required)')

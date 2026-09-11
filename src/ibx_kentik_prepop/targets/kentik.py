@@ -264,14 +264,18 @@ def build_device_payload(config, device: Device, site_id: str = '') -> dict:
                            'port': config.device.snmp_port}
         body['nms'] = nms
 
-        # The flow-side SNMP credential. VERIFY per tenant: this is the field
-        # the naming points at for agent-based flow SNMP, but the API documents
-        # it as alphanumeric-only, so a hyphenated credential name may be
-        # rejected. Set device.send_flow_snmp_credential to false to omit it.
-        flow_credential = (config.device.flow_snmp_credential_name
-                           or config.device.credential_name)
-        if flow_credential and config.device.send_flow_snmp_credential:
-            body['flow_snmp_credential_name'] = flow_credential
+        # flow_snmp_credential_name is NOT the field for this. A tenant
+        # rejected it outright:
+        #   400 At path: request.device.flow_snmp_credential_name --
+        #   Expected a value of type `never`, but received: "marrison-test"
+        # A `never` type means the write schema forbids it here, so the agent's
+        # credential goes in nms.snmp.credential_name and nowhere else. It is
+        # only sent if someone sets it deliberately, and it will very likely be
+        # rejected if they do.
+        if (config.device.flow_snmp_credential_name
+                and config.device.send_flow_snmp_credential):
+            body['flow_snmp_credential_name'] = \
+                config.device.flow_snmp_credential_name
     elif config.device.snmp_mode == 'community':
         if device.mgmt_ip:
             body['device_snmp_ip'] = device.mgmt_ip
