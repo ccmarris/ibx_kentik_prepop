@@ -48,6 +48,7 @@ __author_email__ = 'chris@infoblox.com'
 __license__ = 'BSD'
 
 import logging
+import re
 import requests
 from ibx_kentik_prepop.model import Device
 from ibx_kentik_prepop.sources.base import describe, match_site, role_from_text
@@ -69,6 +70,13 @@ ASSET_FIELDS_EXTRA = ('type', 'vendor', 'model', 'os_version', 'location',
                       'description', 'comment', 'tags')
 ASSET_FIELDS = ASSET_FIELDS_CORE + ASSET_FIELDS_EXTRA
 PAGE_SIZE = 1000
+
+# The API names the field it does not recognise, one per response, e.g.
+#   {"error": {"code": "UNKNOWN_FIELD", "details": [{"field": "fields",
+#    "message": "field \"os_version\" is not a recognized field"}], ...}}
+# so an unrecognised name can be dropped and the search retried, keeping every
+# field the tenant does know rather than falling back to the bare minimum.
+UNKNOWN_FIELD = re.compile(r'field \\?"(\w+)\\?" is not a recognized field')
 
 
 class UAI(UDDI):
@@ -94,23 +102,51 @@ class UAI(UDDI):
         Returns:
             list: raw asset dicts, empty list on failure
         '''
-        assets = self._search(category, ASSET_FIELDS)
+        fields = list(ASSET_FIELDS)
+        dropped = []
+        assets = None
 
-        if assets is None and self.last_error:
-            logger.warning('Retrying the asset search with the core field set '
-                           'after: %s', self.last_error)
-            self.reduced_fields = True
-            assets = self._search(category, ASSET_FIELDS_CORE)
+        # One unrecognised field per response, so loop - bounded by the number
+        # of optional fields there are to lose.
+        for _ in range(len(ASSET_FIELDS_EXTRA) + 1):
+            assets = self._search(category, tuple(fields))
             if assets is not None:
-                self.last_error = (
-                    f'The asset search refused the full field projection, so '
-                    f'vendor, model, OS and description are unavailable '
-                    f'({self.first_error})')
+                break
+
+            # The name appears in both details[].message and message, hence
+            # the de-duplication.
+            unknown = list(dict.fromkeys(
+                f for f in UNKNOWN_FIELD.findall(self.last_error or '')
+                if f in fields and f not in ASSET_FIELDS_CORE))
+            if not unknown:
+                break
+
+            for field in unknown:
+                fields.remove(field)
+                dropped.append(field)
+            self.reduced_fields = True
+            logger.warning('The tenant does not recognise %s, retrying without '
+                           'it', ', '.join(unknown))
+
+        if assets is None and fields != list(ASSET_FIELDS_CORE):
+            logger.warning('Falling back to the core asset field set after: %s',
+                           self.last_error)
+            self.reduced_fields = True
+            dropped = [f for f in ASSET_FIELDS if f not in ASSET_FIELDS_CORE]
+            assets = self._search(category, ASSET_FIELDS_CORE)
 
         if assets is None:
             assets = []
+        elif dropped:
+            self.last_error = (
+                f"This tenant's asset search does not recognise "
+                f"{', '.join(dropped)}, so that detail is unavailable"
+            )
+        else:
+            self.last_error = ''
 
-        logger.info('Retrieved %d UAI asset(s)', len(assets))
+        logger.info('Retrieved %d UAI asset(s)%s', len(assets),
+                    f" (without {', '.join(dropped)})" if dropped else '')
         return assets
 
     def _search(self, category: str, fields: tuple):

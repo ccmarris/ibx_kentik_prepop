@@ -265,12 +265,25 @@ and names the switch to turn on, rather than showing an empty device list.
 
 **Source API failures are never silent.** Both discovery adapters ask for more
 fields than every release knows about — `description`, `location` and
-`extattrs` on `discovery:device`, and `description`/`comment`/`tags` in the UAI
-asset projection. A platform that does not recognise one of those names rejects
-the *whole* request, which is indistinguishable from having no devices. So each
-adapter retries with a core field set it knows is safe, keeps the devices, and
-reports the degradation as a `device_source_error` warning naming the field it
-lost. Any other API failure surfaces the same way.
+`extattrs` on `discovery:device`, and `description`/`comment`/`tags`/`os_version`
+in the UAI asset projection. A platform that does not recognise one of those
+names rejects the *whole* request, which is indistinguishable from having no
+devices.
+
+The asset search names the field it does not recognise, one per response:
+
+```
+400 {"error": {"code": "UNKNOWN_FIELD", "details": [{"field": "fields",
+     "message": "field \"os_version\" is not a recognized field"}]}}
+```
+
+so that field is dropped and the search retried, keeping every field the tenant
+*does* know — falling back to the bare minimum would needlessly lose vendor,
+model and description. `os_version` is known not to exist on at least one
+tenant. The NIOS adapter retries with a core `_return_fields` list on the same
+principle. Either way the devices survive, and the lost detail is reported as a
+`device_source_error` warning naming the fields. Any other API failure surfaces
+the same way.
 
 **Interfaces and sending IPs.** Network Insight interfaces
 (`discovery:deviceinterface`) and UAI asset addresses become the device's

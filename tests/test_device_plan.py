@@ -512,3 +512,68 @@ def test_a_source_api_failure_is_reported_not_silent(monkeypatch):
     assert 'device_source_error' in categories
     detail = [w.detail for w in plan.warnings if w.category == 'device_source_error'][0]
     assert 'unknown field' in detail
+
+
+def test_unknown_asset_fields_are_dropped_one_at_a_time(monkeypatch):
+    '''
+    The asset API names the field it does not recognise, one per response, so
+    only that field is dropped - falling back to the core set would throw away
+    vendor, model and description a tenant does know.
+    '''
+    from dataclasses import replace as dc_replace
+    from ibx_kentik_prepop.sources.uddi_uai import (ASSET_FIELDS,
+                                                    ASSET_FIELDS_CORE, UAI)
+
+    unknown = {'os_version', 'comment'}
+    attempts = []
+
+    class Probe(UAI):
+        def _search(self, category, fields):
+            attempts.append(list(fields))
+            bad = next((f for f in fields if f in unknown), None)
+            if bad:
+                message = f'field \\"{bad}\\" is not a recognized field'
+                self.last_error = ('UAI asset search failed: 400 '
+                                   '{"error": {"details": [{"field": "fields", '
+                                   f'"message": "{message}"}}], '
+                                   f'"message": "{message}"}}}}')
+                return None
+            return [{'name': 'lon-rtr-01', 'vendor': 'Cisco',
+                     'ip_addresses': ['10.1.0.1']}]
+
+    config = device_config()
+    config = dc_replace(config, uddi=dc_replace(config.uddi, api_key='k'))
+    source = Probe(config)
+    assets = source.search_assets('network')
+
+    assert len(attempts) == 3
+    assert len(attempts[-1]) == len(ASSET_FIELDS) - 2
+    assert set(ASSET_FIELDS_CORE).issubset(attempts[-1])
+    assert 'vendor' in attempts[-1] and 'description' in attempts[-1]
+    assert 'os_version' not in attempts[-1] and 'comment' not in attempts[-1]
+    assert assets[0]['name'] == 'lon-rtr-01'
+    assert 'os_version, comment' in source.last_error
+
+
+def test_an_unparseable_projection_error_falls_back_to_core(monkeypatch):
+    from dataclasses import replace as dc_replace
+    from ibx_kentik_prepop.sources.uddi_uai import ASSET_FIELDS_CORE, UAI
+
+    attempts = []
+
+    class Probe(UAI):
+        def _search(self, category, fields):
+            attempts.append(list(fields))
+            if set(fields) != set(ASSET_FIELDS_CORE):
+                self.last_error = 'UAI asset search failed: 400 something odd'
+                return None
+            return [{'name': 'lon-rtr-01', 'ip_addresses': ['10.1.0.1']}]
+
+    config = device_config()
+    config = dc_replace(config, uddi=dc_replace(config.uddi, api_key='k'))
+    source = Probe(config)
+    assets = source.search_assets('network')
+
+    assert set(attempts[-1]) == set(ASSET_FIELDS_CORE)
+    assert assets[0]['name'] == 'lon-rtr-01'
+    assert 'does not recognise' in source.last_error
