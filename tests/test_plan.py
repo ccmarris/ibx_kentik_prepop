@@ -195,3 +195,35 @@ def test_a_site_key_that_matches_nothing_is_reported(monkeypatch):
     assert warning, [w.category for w in plan.warnings]
     assert '--list-keys' in warning[0].detail
     assert plan.entries == []
+
+
+def test_both_tasks_report_the_same_source_warnings(monkeypatch):
+    '''
+    Site derivation is shared by the two plan builders, so a warning added to
+    one must not go missing from the other
+    '''
+    from ibx_kentik_prepop.plan import build_device_plan
+
+    records = [record('10.1.0.0/24', site=''), record('10.2.0.0/24', site='')]
+    monkeypatch.setattr(plan_module, 'get_source', lambda cfg: FakeSource(records))
+
+    site_plan = build_plan(make_config(), kentik=None)
+    device_plan, _ = build_device_plan(make_config(task='devices'), kentik=None)
+
+    assert 'site_key_not_found' in [w.category for w in site_plan.warnings]
+    assert 'site_key_not_found' in [w.category for w in device_plan.warnings]
+
+
+def test_the_empty_source_warning_keeps_its_task_specific_wording(monkeypatch):
+    from ibx_kentik_prepop.plan import build_device_plan
+
+    monkeypatch.setattr(plan_module, 'get_source', lambda cfg: FakeSource([]))
+
+    site_plan = build_plan(make_config(), kentik=None)
+    device_plan, _ = build_device_plan(make_config(task='devices'), kentik=None)
+
+    site_warning = [w for w in site_plan.warnings if w.category == 'no_subnets'][0]
+    device_warning = [w for w in device_plan.warnings if w.category == 'no_subnets'][0]
+
+    assert site_warning.message == 'The source returned no subnets'
+    assert 'devices cannot be placed on sites' in device_warning.message

@@ -55,6 +55,7 @@ import threading
 from argparse import Namespace
 from pathlib import Path
 from flask import Flask, Response, jsonify, request, send_from_directory, stream_with_context
+from werkzeug.exceptions import HTTPException
 from ibx_kentik_prepop import export, report
 from ibx_kentik_prepop.apply import apply_device_plan, apply_plan
 from ibx_kentik_prepop.config import (DEFAULT_INI_FILE, INI_SECTIONS,
@@ -186,6 +187,29 @@ def candidate_inis() -> list:
     return candidates
 
 
+def as_int(value, field: str):
+    '''
+    Coerce a posted form value to an int without crashing the request
+
+    A number field in the browser is not a guarantee - the endpoint is reachable
+    by anything that can POST JSON, and an unparseable value should read back as
+    "not supplied" rather than as a 500 the UI cannot parse.
+
+    Parameters:
+        value: the posted value
+        field (str): field name, for the log line
+
+    Returns:
+        int: the value, or None when it is not a whole number
+    '''
+    result = None
+    try:
+        result = int(str(value).strip())
+    except (TypeError, ValueError):
+        logger.warning('Ignoring %s=%r: not a whole number', field, value)
+    return result
+
+
 def form_namespace(body: dict) -> Namespace:
     '''
     Turn a posted JSON body into the namespace build_config expects
@@ -206,7 +230,7 @@ def form_namespace(body: dict) -> Namespace:
     for numeric in ('max_prefix_len', 'plan_id', 'monitoring_template_id',
                     'sample_rate'):
         if fields.get(numeric):
-            fields[numeric] = int(fields[numeric])
+            fields[numeric] = as_int(fields[numeric], numeric)
     fields['exclude_device'] = [str(v) for v in (body.get('exclude_device') or [])]
     fields['exclude_file'] = None
     fields['sending_ip_map'] = {str(k): [str(a) for a in v]
@@ -614,6 +638,31 @@ def post_apply():
                     mimetype='text/event-stream',
                     headers={'Cache-Control': 'no-cache',
                              'X-Accel-Buffering': 'no'})
+
+
+@app.errorhandler(Exception)
+def handle_unexpected(exc):
+    '''
+    Answer any unhandled failure as JSON
+
+    Every caller of this API is the UI's fetch(), which parses the body as JSON;
+    Flask's HTML traceback turns a comprehensible backend error into an
+    unrelated parse error on screen. The detail is logged in full and only the
+    exception text is returned.
+
+    Parameters:
+        exc (Exception): the unhandled exception
+
+    Returns:
+        Response: JSON error with an appropriate status code
+    '''
+    if isinstance(exc, HTTPException):
+        response = jsonify({'error': exc.description, 'status': exc.code}), exc.code
+    else:
+        logger.exception('Unhandled error serving %s', request.path)
+        response = jsonify({'error': f'{type(exc).__name__}: {exc}',
+                            'status': 500}), 500
+    return response
 
 
 def _frame(event: dict) -> str:

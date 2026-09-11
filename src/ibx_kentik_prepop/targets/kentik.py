@@ -48,6 +48,9 @@ __author_email__ = 'chris@infoblox.com'
 __license__ = 'BSD'
 
 import logging
+import time
+from email.utils import parsedate_to_datetime
+from datetime import datetime, timezone
 import requests
 from ibx_kentik_prepop.config import AGENT_SNMP_MODES
 from ibx_kentik_prepop.model import (CLASSIFICATIONS, CLASS_TO_KENTIK, Device,
@@ -91,6 +94,88 @@ WRITABLE_DEVICE_FIELDS = (
 # `never`", so it must never be echoed back on an update either - a device
 # configured in the portal can carry a value this tool cannot resend.
 UNWRITABLE_DEVICE_FIELDS = ('flow_snmp_credential_name',)
+
+
+# Statuses worth trying again. 429 and 503 both mean "I did not process this,
+# come back later", which is the only promise safe enough to retry a POST on -
+# a create that may already have consumed a licensed device slot must never be
+# repeated. The rest are ambiguous on a write but harmless on a read or a PUT.
+RETRY_STATUSES = (429, 500, 502, 503, 504)
+NOT_PROCESSED_STATUSES = (429, 503)
+IDEMPOTENT_METHODS = ('GET', 'HEAD', 'PUT', 'DELETE', 'OPTIONS')
+# Longest this client will ever sleep between attempts, whatever Retry-After
+# asks for - an operator watching a progress stream should not wait minutes.
+MAX_RETRY_WAIT = 30.0
+
+
+def retry_wait(response, attempt: int, backoff: float) -> float:
+    '''
+    How long to wait before trying a request again
+
+    Kentik's Retry-After leads when it is present, in either of the forms RFC
+    9110 allows; otherwise the wait doubles per attempt. Capped either way.
+
+    Parameters:
+        response (requests.Response): the failed response, or None
+        attempt (int): zero-based attempt number that just failed
+        backoff (float): base delay in seconds
+
+    Returns:
+        float: seconds to sleep
+    '''
+    delay = backoff * (2 ** attempt)
+    header = ''
+    if response is not None:
+        header = str(response.headers.get('Retry-After', '')).strip()
+
+    if header:
+        try:
+            delay = float(header)
+        except ValueError:
+            try:
+                when = parsedate_to_datetime(header)
+            except (TypeError, ValueError):
+                when = None
+            if when is not None:
+                if when.tzinfo is None:
+                    when = when.replace(tzinfo=timezone.utc)
+                delay = (when - datetime.now(timezone.utc)).total_seconds()
+
+    return max(0.0, min(delay, MAX_RETRY_WAIT))
+
+
+def should_retry(method: str, exc, attempt: int, retries: int) -> bool:
+    '''
+    Decide whether a failed request may be tried again
+
+    A write is only repeated when the server said outright that it did not
+    process the request. Anything ambiguous - a timeout, a dropped connection,
+    a gateway error - is retried on idempotent methods only, because a device
+    create that actually landed would otherwise be repeated and burn a second
+    licensed slot.
+
+    Parameters:
+        method (str): HTTP method
+        exc (requests.RequestException): the failure
+        attempt (int): zero-based attempt number that just failed
+        retries (int): how many retries are allowed in total
+
+    Returns:
+        bool: True when the request should be repeated
+    '''
+    retry = False
+    if attempt < retries:
+        response = getattr(exc, 'response', None)
+        if response is not None:
+            status = response.status_code
+            if method.upper() in IDEMPOTENT_METHODS:
+                retry = status in RETRY_STATUSES
+            else:
+                retry = status in NOT_PROCESSED_STATUSES
+        elif isinstance(exc, (requests.ConnectionError, requests.Timeout)):
+            # No response at all: safe to repeat a read, never a write.
+            retry = method.upper() in IDEMPOTENT_METHODS
+    return retry
 
 
 def camel(name: str) -> str:
@@ -324,6 +409,8 @@ class KENTIK:
         })
         self.session.verify = self.kentik.verify_ssl
         self.timeout = self.kentik.timeout_seconds
+        self.retries = max(int(self.kentik.retries), 0)
+        self.retry_backoff = max(float(self.kentik.retry_backoff), 0.0)
         # Detail of the most recent failed request, for reporting to the caller
         self.last_error = {}
         logger.debug('Kentik target initialised (sites via %s, devices via %s)',
@@ -352,6 +439,10 @@ class KENTIK:
         '''
         Issue a request and return the parsed JSON body
 
+        Rate limits and transient server errors are retried with a backoff that
+        honours Retry-After. Writes are only repeated when Kentik said outright
+        that it had not processed them - see should_retry.
+
         On failure the status code and response body are kept in last_error so
         the caller can report what Kentik actually said rather than just None.
 
@@ -365,20 +456,50 @@ class KENTIK:
         '''
         result = None
         self.last_error = {}
-        logger.debug('%s %s', method, url)
-        try:
-            response = self.session.request(method, url, json=body, timeout=self.timeout)
-            response.raise_for_status()
-            result = response.json() if response.content else {}
-        except requests.RequestException as exc:
-            status = 0
-            detail = ''
-            if getattr(exc, 'response', None) is not None:
-                status = exc.response.status_code
-                detail = exc.response.text[:500]
-            self.last_error = {'method': method, 'url': url, 'status': status,
-                               'message': str(exc), 'body': detail}
-            logger.error('Kentik %s %s failed: %s %s', method, url, exc, detail)
+        attempt = 0
+
+        while True:
+            logger.debug('%s %s (attempt %d)', method, url, attempt + 1)
+            try:
+                response = self.session.request(method, url, json=body,
+                                                timeout=self.timeout)
+                response.raise_for_status()
+                try:
+                    result = response.json() if response.content else {}
+                except ValueError as exc:
+                    # A 200 carrying something that is not JSON is a proxy or a
+                    # captive portal, not Kentik - say so rather than crashing.
+                    self.last_error = {
+                        'method': method, 'url': url,
+                        'status': response.status_code,
+                        'message': f'response was not JSON: {exc}',
+                        'body': response.text[:500]}
+                    logger.error('Kentik %s %s returned non-JSON: %s',
+                                 method, url, response.text[:200])
+                break
+            except requests.RequestException as exc:
+                if should_retry(method, exc, attempt, self.retries):
+                    wait = retry_wait(getattr(exc, 'response', None), attempt,
+                                      self.retry_backoff)
+                    logger.warning('Kentik %s %s failed (%s), retrying in %.1fs '
+                                   '(attempt %d of %d)', method, url, exc, wait,
+                                   attempt + 2, self.retries + 1)
+                    time.sleep(wait)
+                    attempt += 1
+                    continue
+
+                status = 0
+                detail = ''
+                if getattr(exc, 'response', None) is not None:
+                    status = exc.response.status_code
+                    detail = exc.response.text[:500]
+                self.last_error = {'method': method, 'url': url, 'status': status,
+                                   'message': str(exc), 'body': detail,
+                                   'attempts': attempt + 1}
+                logger.error('Kentik %s %s failed after %d attempt(s): %s %s',
+                             method, url, attempt + 1, exc, detail)
+                break
+
         return result
 
     def error_text(self) -> str:

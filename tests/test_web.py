@@ -348,3 +348,49 @@ def test_apply_rejects_a_bad_override_before_running(client):
                                                'site_key': 'Site',
                                                'config_file': '/nope.ini'})
     assert response.status_code == 400
+
+
+def test_a_bad_number_is_ignored_rather_than_crashing():
+    '''
+    The endpoints are reachable by anything that can POST JSON, so an
+    unparseable number must read back as "not supplied"
+    '''
+    fields = server.form_namespace({'plan_id': 'not-a-number',
+                                    'sample_rate': ' 4 ',
+                                    'monitoring_template_id': '12.5'})
+
+    assert fields.plan_id is None
+    assert fields.sample_rate == 4
+    assert fields.monitoring_template_id is None
+
+
+def test_an_unexpected_error_is_answered_as_json(monkeypatch, ini_file):
+    '''
+    A Flask HTML traceback reaches the UI's fetch() as an unrelated JSON parse
+    error, so every failure has to come back as JSON
+    '''
+    monkeypatch.setattr(server, 'CONFIG_FILE', str(ini_file))
+    monkeypatch.setattr(server, 'LOCK_CONFIG', False)
+
+    def explode(*args, **kwargs):
+        raise RuntimeError('the source fell over')
+
+    monkeypatch.setattr(server, 'build_config', explode)
+    server.app.config.update(TESTING=False, PROPAGATE_EXCEPTIONS=False)
+    test_client = server.app.test_client()
+
+    response = test_client.post('/api/plan', json={})
+    server.app.config.update(TESTING=True, PROPAGATE_EXCEPTIONS=None)
+
+    assert response.status_code == 500
+    assert response.is_json
+    assert 'the source fell over' in response.get_json()['error']
+
+
+def test_a_missing_route_is_also_json(monkeypatch, ini_file):
+    server.app.config.update(TESTING=False, PROPAGATE_EXCEPTIONS=False)
+    response = server.app.test_client().get('/api/no-such-endpoint')
+    server.app.config.update(TESTING=True, PROPAGATE_EXCEPTIONS=None)
+
+    assert response.status_code == 404
+    assert response.is_json

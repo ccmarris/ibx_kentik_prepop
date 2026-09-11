@@ -200,6 +200,12 @@ DEFAULT_BGP_FLOWSPEC = False
 
 DEFAULT_TIMEOUT = 30
 
+# Kentik rate limits and occasionally answers a burst with a 5xx. A bulk device
+# apply is hundreds of consecutive writes, so transient failures are retried
+# rather than reported as a failed device the operator has to chase.
+DEFAULT_RETRIES = 3
+DEFAULT_RETRY_BACKOFF = 2.0
+
 
 @dataclass(frozen=True)
 class NiosConfig:
@@ -251,6 +257,8 @@ class KentikConfig:
     credential_list: str = DEFAULT_CREDENTIAL_LIST
     auth_email_header: str = DEFAULT_AUTH_EMAIL_HEADER
     auth_token_header: str = DEFAULT_AUTH_TOKEN_HEADER
+    retries: int = DEFAULT_RETRIES
+    retry_backoff: float = DEFAULT_RETRY_BACKOFF
 
 
 @dataclass(frozen=True)
@@ -615,6 +623,8 @@ def build_config(args, ini_file: str = '', yaml_file: str = '') -> ProjectConfig
         credential_list=str(kentik_yaml.get('credential_list', DEFAULT_CREDENTIAL_LIST)),
         auth_email_header=str(kentik_yaml.get('auth_email_header', DEFAULT_AUTH_EMAIL_HEADER)),
         auth_token_header=str(kentik_yaml.get('auth_token_header', DEFAULT_AUTH_TOKEN_HEADER)),
+        retries=int(kentik_yaml.get('retries', DEFAULT_RETRIES)),
+        retry_backoff=float(kentik_yaml.get('retry_backoff', DEFAULT_RETRY_BACKOFF)),
     )
 
     site_type_map = dict(DEFAULT_SITE_TYPE_MAP)

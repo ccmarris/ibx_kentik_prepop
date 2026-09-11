@@ -401,6 +401,49 @@ def device_mismatch(raw_device: dict, device, site_id: str, config) -> dict:
     return mismatch
 
 
+def derive_sites(config, plan, no_subnets_detail: str = '') -> tuple:
+    '''
+    Read the IPAM source and derive the sites both tasks are built on
+
+    Shared by the two plan builders: the device task needs sites to place
+    devices, the site task needs them to create sites, and both have to report
+    the same warnings when the source is empty or the site key matches nothing.
+
+    Parameters:
+        config (ProjectConfig): assembled configuration
+        plan (Plan): plan to record warnings against
+        no_subnets_detail (str): extra wording for the empty-source warning
+
+    Returns:
+        tuple: (SiteSource, list of normalised records, list of Site objects)
+    '''
+    ipam_source = get_source(config)
+    records = ipam_source.get_subnets()
+
+    if not records:
+        message = 'The source returned no subnets'
+        if no_subnets_detail:
+            message = f'{message}, {no_subnets_detail}'
+        plan.add_warning('no_subnets', message,
+                         'check credentials, network view / IP space and filters')
+
+    sites, warnings = build_sites(records, config)
+    for category, message, detail in warnings:
+        plan.add_warning(category, message, detail)
+
+    # The site key has a default, so a key that matches nothing has to be said
+    # out loud rather than looking like an empty source.
+    if records and not any(r.get('site') for r in records):
+        plan.add_warning('site_key_not_found',
+                         f'No subnet carries the site key '
+                         f'{config.site.site_key!r}, so no sites could be '
+                         f'derived',
+                         'run with --list-keys to see which EA/tag keys are '
+                         'populated, then pass the right one with --site-key')
+
+    return ipam_source, records, sites
+
+
 def build_device_plan(config, kentik=None) -> tuple:
     '''
     Build the device desired state
@@ -425,27 +468,8 @@ def build_device_plan(config, kentik=None) -> tuple:
                 plan_name=config.device.plan_name,
                 generated=datetime.now(timezone.utc).isoformat(timespec='seconds'))
 
-    ipam_source = get_source(config)
-    records = ipam_source.get_subnets()
-    if not records:
-        plan.add_warning('no_subnets',
-                         'The source returned no subnets, so devices cannot be '
-                         'placed on sites',
-                         'check credentials, network view / IP space and filters')
-
-    sites, warnings = build_sites(records, config)
-    for category, message, detail in warnings:
-        plan.add_warning(category, message, detail)
-
-    # The site key now has a default, so a key that matches nothing has to be
-    # said out loud rather than looking like an empty source.
-    if records and not any(r.get('site') for r in records):
-        plan.add_warning('site_key_not_found',
-                         f'No subnet carries the site key '
-                         f'{config.site.site_key!r}, so no sites could be '
-                         f'derived',
-                         'run with --list-keys to see which EA/tag keys are '
-                         'populated, then pass the right one with --site-key')
+    ipam_source, records, sites = derive_sites(
+        config, plan, 'so devices cannot be placed on sites')
 
     devices = gather_devices(config, ipam_source, records, plan)
     plan.devices = devices
@@ -474,7 +498,17 @@ def build_device_plan(config, kentik=None) -> tuple:
 
         if capacity:
             plan.capacity = capacity
-            plan.plan_id = int(capacity['id']) if capacity['id'] is not None else 0
+            # A plan id that is not a whole number means the API answered with a
+            # shape this tool does not understand; treat it as unresolved rather
+            # than raising, so the apply is blocked with a readable reason.
+            try:
+                plan.plan_id = int(capacity['id'])
+            except (TypeError, ValueError):
+                plan.plan_id = 0
+                plan.add_warning('plan_selection',
+                                 f'Kentik returned a plan id this tool cannot '
+                                 f'use: {capacity["id"]!r}',
+                                 'enter the plan id manually')
             plan.plan_name = capacity['name']
             if plan.plan_id != config.device.plan_id:
                 config = replace(config, device=replace(config.device,
@@ -644,26 +678,7 @@ def build_plan(config, kentik=None) -> Plan:
                 task=TASK_SITES,
                 generated=datetime.now(timezone.utc).isoformat(timespec='seconds'))
 
-    ipam_source = get_source(config)
-    records = ipam_source.get_subnets()
-    if not records:
-        plan.add_warning('no_subnets',
-                         'The source returned no subnets',
-                         'check credentials, network view / IP space and filters')
-
-    sites, warnings = build_sites(records, config)
-    for category, message, detail in warnings:
-        plan.add_warning(category, message, detail)
-
-    # The site key now has a default, so a key that matches nothing has to be
-    # said out loud rather than looking like an empty source.
-    if records and not any(r.get('site') for r in records):
-        plan.add_warning('site_key_not_found',
-                         f'No subnet carries the site key '
-                         f'{config.site.site_key!r}, so no sites could be '
-                         f'derived',
-                         'run with --list-keys to see which EA/tag keys are '
-                         'populated, then pass the right one with --site-key')
+    ipam_source, records, sites = derive_sites(config, plan)
 
     if config.device.enabled:
         kept = gather_devices(config, ipam_source, records, plan)

@@ -49,6 +49,7 @@ __license__ = 'BSD'
 
 import json
 import logging
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from ibx_kentik_prepop.model import (ACTION_CREATE, ACTION_EXISTS,
@@ -86,7 +87,11 @@ def load_state(path: str) -> dict:
 
 def save_state(path: str, state: dict) -> bool:
     '''
-    Write the state file
+    Write the state file atomically
+
+    Written to a temporary file alongside the real one and renamed into place,
+    so a crash part way through cannot leave a half-written document behind -
+    load_state would silently discard the whole history if it did.
 
     Parameters:
         path (str): path to the state file
@@ -96,12 +101,19 @@ def save_state(path: str, state: dict) -> bool:
         bool: True on success
     '''
     written = False
+    state_path = Path(path)
+    temp_path = state_path.with_name(f'{state_path.name}.tmp')
     try:
-        Path(path).write_text(json.dumps(state, indent=2), encoding='utf-8')
+        temp_path.write_text(json.dumps(state, indent=2), encoding='utf-8')
+        os.replace(temp_path, state_path)
         written = True
         logger.debug('Wrote state file %s', path)
-    except OSError as exc:
+    except (OSError, TypeError, ValueError) as exc:
         logger.error('Could not write state file %s: %s', path, exc)
+        try:
+            temp_path.unlink(missing_ok=True)
+        except OSError:
+            logger.debug('Could not remove partial state file %s', temp_path)
     return written
 
 
@@ -142,70 +154,77 @@ def apply_device_plan(config, plan, kentik, on_event=None) -> dict:
           'to_change': to_change, 'mode': plan.device_mode,
           'plan_id': plan.plan_id, 'stats': plan.stats()})
 
-    for entry in plan.device_entries:
-        device = entry.device
-        name = device.name
+    try:
+        for entry in plan.device_entries:
+            device = entry.device
+            name = device.name
 
-        if entry.excluded:
-            results['excluded'].append(name)
-            emit({'type': 'device', 'device': name, 'action': entry.action,
-                  'status': 'excluded', 'detail': entry.exclude_reason})
-            continue
+            if entry.excluded:
+                results['excluded'].append(name)
+                emit({'type': 'device', 'device': name, 'action': entry.action,
+                      'status': 'excluded', 'detail': entry.exclude_reason})
+                continue
 
-        if entry.action == ACTION_EXISTS:
-            results['existing'].append(name)
-            emit({'type': 'device', 'device': name, 'action': entry.action,
-                  'status': 'exists', 'kentik_id': entry.kentik_id,
-                  'mismatch': entry.mismatch})
-            continue
+            if entry.action == ACTION_EXISTS:
+                results['existing'].append(name)
+                emit({'type': 'device', 'device': name, 'action': entry.action,
+                      'status': 'exists', 'kentik_id': entry.kentik_id,
+                      'mismatch': entry.mismatch})
+                continue
 
-        if entry.action == ACTION_UPDATE:
-            raw_device = kentik.get_device(entry.kentik_id)
-            updated = None
-            if raw_device is not None:
-                updated = kentik.update_device_placement(raw_device, device,
-                                                         entry.site_id)
-            if updated is None:
-                error = kentik.error_text() or 'could not read the existing device'
+            if entry.action == ACTION_UPDATE:
+                raw_device = kentik.get_device(entry.kentik_id)
+                updated = None
+                if raw_device is not None:
+                    updated = kentik.update_device_placement(raw_device, device,
+                                                             entry.site_id)
+                if updated is None:
+                    error = kentik.error_text() or 'could not read the existing device'
+                    results['failed'].append(name)
+                    results['errors'][name] = error
+                    emit({'type': 'device', 'device': name, 'action': entry.action,
+                          'status': 'failed', 'error': error})
+                else:
+                    results['updated'].append(name)
+                    emit({'type': 'device', 'device': name, 'action': entry.action,
+                          'status': 'updated', 'kentik_id': entry.kentik_id,
+                          'mismatch': entry.mismatch})
+                continue
+
+            created = kentik.create_device(device, entry.site_id)
+            if created is None:
+                error = kentik.error_text()
                 results['failed'].append(name)
                 results['errors'][name] = error
                 emit({'type': 'device', 'device': name, 'action': entry.action,
                       'status': 'failed', 'error': error})
             else:
-                results['updated'].append(name)
+                device_id = str(created.get('id', ''))
+                results['created'].append(name)
+                state['devices'][sanitise_device_name(name)] = {
+                    'id': device_id, 'mode': plan.device_mode,
+                    'site_id': entry.site_id, 'plan_id': plan.plan_id,
+                    'sending_ips': list(device.sending_ips or ()),
+                    'applied': now, 'source': plan.source, 'origin': device.origin}
                 emit({'type': 'device', 'device': name, 'action': entry.action,
-                      'status': 'updated', 'kentik_id': entry.kentik_id,
-                      'mismatch': entry.mismatch})
-            continue
+                      'status': 'created', 'kentik_id': device_id,
+                      'detail': f'site {entry.site_id}' if entry.site_id else 'no site'})
 
-        created = kentik.create_device(device, entry.site_id)
-        if created is None:
-            error = kentik.error_text()
-            results['failed'].append(name)
-            results['errors'][name] = error
-            emit({'type': 'device', 'device': name, 'action': entry.action,
-                  'status': 'failed', 'error': error})
-        else:
-            device_id = str(created.get('id', ''))
-            results['created'].append(name)
-            state['devices'][sanitise_device_name(name)] = {
-                'id': device_id, 'mode': plan.device_mode,
-                'site_id': entry.site_id, 'plan_id': plan.plan_id,
-                'sending_ips': list(device.sending_ips or ()),
-                'applied': now, 'source': plan.source, 'origin': device.origin}
-            emit({'type': 'device', 'device': name, 'action': entry.action,
-                  'status': 'created', 'kentik_id': device_id,
-                  'detail': f'site {entry.site_id}' if entry.site_id else 'no site'})
-
-    state['runs'].append({
-        'applied': now, 'task': 'devices', 'source': plan.source,
-        'mode': plan.device_mode, 'plan_id': plan.plan_id,
-        'created': len(results['created']), 'updated': len(results['updated']),
-        'existing': len(results['existing']), 'excluded': len(results['excluded']),
-        'failed': len(results['failed']),
-    })
-    state['runs'] = state['runs'][-50:]
-    save_state(config.state_file, state)
+    finally:
+        # Devices may already have been created before something went wrong, and
+        # each one holds a licensed slot - the record of what was written is kept
+        # whichever way the loop ends.
+        state['runs'].append({
+            'applied': now, 'task': 'devices', 'source': plan.source,
+            'mode': plan.device_mode, 'plan_id': plan.plan_id,
+            'created': len(results['created']),
+            'updated': len(results['updated']),
+            'existing': len(results['existing']),
+            'excluded': len(results['excluded']),
+            'failed': len(results['failed']),
+        })
+        state['runs'] = state['runs'][-50:]
+        save_state(config.state_file, state)
 
     logger.info('Device apply complete: %d created, %d updated, %d existing, '
                 '%d excluded, %d failed',
@@ -256,74 +275,78 @@ def apply_plan(config, plan, kentik, on_event=None) -> dict:
     emit({'type': 'start', 'sites': len(plan.entries), 'to_change': total,
           'stats': plan.stats()})
 
-    for entry in plan.entries:
-        name = entry.site.name
-        networks = entry.merged or {c: entry.site.networks(c)
-                                    for c in entry.site.counts()}
+    try:
+        for entry in plan.entries:
+            name = entry.site.name
+            networks = entry.merged or {c: entry.site.networks(c)
+                                        for c in entry.site.counts()}
 
-        if entry.action == ACTION_NO_CHANGE:
-            results['unchanged'].append(name)
-            logger.info('Site %s is already up to date', name)
-            emit({'type': 'site', 'site': name, 'action': entry.action,
-                  'status': 'unchanged', 'kentik_id': entry.kentik_id})
-            continue
+            if entry.action == ACTION_NO_CHANGE:
+                results['unchanged'].append(name)
+                logger.info('Site %s is already up to date', name)
+                emit({'type': 'site', 'site': name, 'action': entry.action,
+                      'status': 'unchanged', 'kentik_id': entry.kentik_id})
+                continue
 
-        if entry.action == ACTION_CREATE:
-            created = kentik.create_site(entry.site, networks)
-            if created is None:
-                error = kentik.error_text()
-                results['failed'].append(name)
-                results['errors'][name] = error
-                emit({'type': 'site', 'site': name, 'action': entry.action,
-                      'status': 'failed', 'error': error})
-            else:
-                site_id = str(created.get('id', ''))
-                results['created'].append(name)
-                state['sites'][name] = {'id': site_id, 'action': ACTION_CREATE,
-                                        'applied': now,
-                                        'site_key': plan.site_key,
-                                        'source': plan.source}
-                emit({'type': 'site', 'site': name, 'action': entry.action,
-                      'status': 'created', 'kentik_id': site_id,
-                      'added': entry.added})
-        elif entry.action == ACTION_UPDATE:
-            updated = kentik.update_site(entry.kentik_id, entry.site, networks,
-                                         entry.raw_site)
-            if updated is None:
-                error = kentik.error_text()
-                results['failed'].append(name)
-                results['errors'][name] = error
-                emit({'type': 'site', 'site': name, 'action': entry.action,
-                      'status': 'failed', 'error': error})
-            else:
-                results['updated'].append(name)
-                record = state['sites'].get(name, {})
-                record.update({'id': entry.kentik_id, 'action': ACTION_UPDATE,
-                               'applied': now, 'site_key': plan.site_key,
-                               'source': plan.source})
-                state['sites'][name] = record
-                emit({'type': 'site', 'site': name, 'action': entry.action,
-                      'status': 'updated', 'kentik_id': entry.kentik_id,
-                      'added': entry.added, 'extra': entry.extra})
+            if entry.action == ACTION_CREATE:
+                created = kentik.create_site(entry.site, networks)
+                if created is None:
+                    error = kentik.error_text()
+                    results['failed'].append(name)
+                    results['errors'][name] = error
+                    emit({'type': 'site', 'site': name, 'action': entry.action,
+                          'status': 'failed', 'error': error})
+                else:
+                    site_id = str(created.get('id', ''))
+                    results['created'].append(name)
+                    state['sites'][name] = {'id': site_id, 'action': ACTION_CREATE,
+                                            'applied': now,
+                                            'site_key': plan.site_key,
+                                            'source': plan.source}
+                    emit({'type': 'site', 'site': name, 'action': entry.action,
+                          'status': 'created', 'kentik_id': site_id,
+                          'added': entry.added})
+            elif entry.action == ACTION_UPDATE:
+                updated = kentik.update_site(entry.kentik_id, entry.site, networks,
+                                             entry.raw_site)
+                if updated is None:
+                    error = kentik.error_text()
+                    results['failed'].append(name)
+                    results['errors'][name] = error
+                    emit({'type': 'site', 'site': name, 'action': entry.action,
+                          'status': 'failed', 'error': error})
+                else:
+                    results['updated'].append(name)
+                    record = state['sites'].get(name, {})
+                    record.update({'id': entry.kentik_id, 'action': ACTION_UPDATE,
+                                   'applied': now, 'site_key': plan.site_key,
+                                   'source': plan.source})
+                    state['sites'][name] = record
+                    emit({'type': 'site', 'site': name, 'action': entry.action,
+                          'status': 'updated', 'kentik_id': entry.kentik_id,
+                          'added': entry.added, 'extra': entry.extra})
 
-    if plan.devices:
-        note = (f'{len(plan.devices)} device candidate(s) were reported but not '
-                f'touched by this site run. Switch the task to devices to '
-                f'create them.')
-        results['notes'].append(note)
-        emit({'type': 'note', 'message': note, 'devices': len(plan.devices)})
+        if plan.devices:
+            note = (f'{len(plan.devices)} device candidate(s) were reported but not '
+                    f'touched by this site run. Switch the task to devices to '
+                    f'create them.')
+            results['notes'].append(note)
+            emit({'type': 'note', 'message': note, 'devices': len(plan.devices)})
 
-    state['runs'].append({
-        'applied': now,
-        'source': plan.source,
-        'site_key': plan.site_key,
-        'created': len(results['created']),
-        'updated': len(results['updated']),
-        'unchanged': len(results['unchanged']),
-        'failed': len(results['failed']),
-    })
-    state['runs'] = state['runs'][-50:]
-    save_state(config.state_file, state)
+    finally:
+        # A site run that dies part way through has still created sites; the
+        # record of what was written is kept whichever way the loop ends.
+        state['runs'].append({
+            'applied': now,
+            'source': plan.source,
+            'site_key': plan.site_key,
+            'created': len(results['created']),
+            'updated': len(results['updated']),
+            'unchanged': len(results['unchanged']),
+            'failed': len(results['failed']),
+        })
+        state['runs'] = state['runs'][-50:]
+        save_state(config.state_file, state)
 
     logger.info('Apply complete: %d created, %d updated, %d unchanged, %d failed',
                 len(results['created']), len(results['updated']),

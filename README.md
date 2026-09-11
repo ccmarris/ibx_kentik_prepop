@@ -191,14 +191,38 @@ summarised prefix lists map onto the site's `addressClassification`:
 | `other` | `otherNetworks` |
 
 Matching is by site **title**, case-insensitively. An unknown title is created;
-a known one is updated. By default the derived prefixes are **added** to
-whatever Kentik already holds, so prefixes added by hand in the portal survive;
-`--replace-networks` makes the derived lists authoritative. `siteMarket`,
-`architecture`, `postalAddress` and the coordinates of an existing site are
-preserved on update.
+a known one is updated. The derived prefixes are always **added** to whatever
+Kentik already holds: a site `PUT` merges the classification lists rather than
+replacing them, and the Site API offers no field mask and no `PATCH`, so nothing
+this tool sends can remove a prefix. Prefixes Kentik holds that the Infoblox
+data does not account for are reported as *extra* — remove them in the portal if
+they are unwanted. `siteMarket`, `architecture`, `postalAddress` and the
+coordinates of an existing site are preserved on update.
 
 Applied runs are recorded in `ibx_kentik_prepop_state.json` (site name, Kentik
-id, action, timestamp, and the last 50 run summaries).
+id, action, timestamp, and the last 50 run summaries). The file is written
+atomically, and it is written even when a run fails part way through — every
+device created holds a licensed slot, so the record of what was written must
+survive the failure.
+
+### Rate limits and transient failures
+
+Kentik rate-limits, and a bulk device apply is hundreds of consecutive writes.
+Requests that fail are retried with a doubling backoff that honours
+`Retry-After`, capped at 30 seconds:
+
+| Failure | Read / `PUT` | `POST` (create) |
+|---|---|---|
+| 429, 503 — *not processed, come back later* | retried | retried |
+| 500, 502, 504 — ambiguous | retried | **reported, never retried** |
+| timeout or dropped connection | retried | **reported, never retried** |
+
+A create that may already have landed is never repeated, because repeating it
+would consume a second licensed device slot. Re-running the tool is the safe
+recovery: existing devices are detected by name and reported as `exists`.
+
+Tune with `retries` and `retry_backoff` in the `kentik:` section of the YAML
+config (defaults: 3 and 2.0 seconds).
 
 ## Kentik import artefacts
 

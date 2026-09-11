@@ -5,6 +5,7 @@ Tests for applying a plan to Kentik
 '''
 
 from dataclasses import replace
+import pytest
 from conftest import make_config, make_site
 from ibx_kentik_prepop.apply import apply_plan, load_state
 from ibx_kentik_prepop.model import (ACTION_CREATE, ACTION_NO_CHANGE,
@@ -126,3 +127,67 @@ def test_apply_reports_failures(tmp_path):
 
     assert results['failed'] == ['NEW-SITE']
     assert results['errors']['NEW-SITE'] == '400: site title already in use'
+
+
+def test_state_is_written_atomically(tmp_path):
+    '''
+    A crash mid-write must not leave a half-written document behind
+    '''
+    from ibx_kentik_prepop.apply import save_state
+
+    path = tmp_path / 'state.json'
+    assert save_state(str(path), {'sites': {'LON': {'id': '1'}}, 'runs': []})
+    assert load_state(str(path))['sites']['LON']['id'] == '1'
+    assert not (tmp_path / 'state.json.tmp').exists()
+
+
+def test_an_unserialisable_state_leaves_the_old_file_intact(tmp_path):
+    from ibx_kentik_prepop.apply import save_state
+
+    path = tmp_path / 'state.json'
+    save_state(str(path), {'sites': {'LON': {'id': '1'}}, 'runs': []})
+    assert save_state(str(path), {'sites': {'LON': object()}, 'runs': []}) is False
+
+    # The good document survives, and no temporary file is left lying about
+    assert load_state(str(path))['sites']['LON']['id'] == '1'
+    assert not (tmp_path / 'state.json.tmp').exists()
+
+
+def test_devices_created_before_a_failure_are_still_recorded(tmp_path):
+    '''
+    Each created device holds a licensed slot, so an apply that dies part way
+    through must still leave a record of what it wrote
+    '''
+    from ibx_kentik_prepop.apply import apply_device_plan
+    from ibx_kentik_prepop.model import DevicePlan
+
+    class HalfBrokenKentik:
+        def __init__(self):
+            self.created = 0
+            return
+
+        def create_device(self, device, site_id=''):
+            self.created += 1
+            if self.created > 1:
+                raise RuntimeError('connection reset')
+            return {'id': '900'}
+
+        def error_text(self):
+            return ''
+
+    state_file = tmp_path / 'state.json'
+    config = make_config()
+    config = replace(config, state_file=str(state_file))
+
+    plan = Plan(source='uddi', site_key='Site', task='devices')
+    for name in ('rtr_one', 'rtr_two'):
+        plan.device_entries.append(
+            DevicePlan(device=Device(name=name, mgmt_ip='10.0.0.1'),
+                       action=ACTION_CREATE))
+
+    with pytest.raises(RuntimeError):
+        apply_device_plan(config, plan, HalfBrokenKentik())
+
+    state = load_state(str(state_file))
+    assert state['devices']['rtr_one']['id'] == '900'
+    assert state['runs'][-1]['created'] == 1
