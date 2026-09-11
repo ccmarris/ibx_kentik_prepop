@@ -15,8 +15,8 @@ from ibx_kentik_prepop.plan import (build_device_plan, device_apply_problems,
 
 
 def device_config(**overrides):
-    base = make_config(devices=True, use_gateways=True)
-    defaults = dict(enabled=True, use_gateways=True)
+    base = make_config(devices=True)
+    defaults = dict(enabled=True)
     defaults.update(overrides)
     return replace(base, task='devices',
                    device=replace(base.device, **defaults))
@@ -108,8 +108,8 @@ def build(config=None, kentik=None, source_devices=None, monkeypatch=None):
     config = config or device_config()
     source = FakeSource(subnets(), source_devices or devices())
     monkeypatch.setattr(plan_module, 'get_source', lambda cfg: source)
-    monkeypatch.setattr(plan_module, 'get_device_source',
-                        lambda cfg, src, p: source)
+    monkeypatch.setattr(plan_module, 'get_device_sources',
+                        lambda cfg, src, p: [source])
     return build_device_plan(config, kentik)
 
 
@@ -381,3 +381,106 @@ def test_bgp_other_device_requires_a_master_device_id(monkeypatch):
 
     complete = replace(config, device=replace(config.device, bgp_device_id='500'))
     assert device_apply_problems(complete, plan) == []
+
+
+def test_both_discovery_sources_are_on_by_default():
+    config = device_config()
+    assert config.device.use_insight is True
+    assert config.device.use_uai is True
+    assert config.device.use_gateways is False
+
+
+def test_only_the_applicable_source_is_used_per_platform(monkeypatch):
+    from ibx_kentik_prepop.plan import get_device_sources
+    from ibx_kentik_prepop.model import Plan
+
+    for source, expected in (('uddi', 'uai'), ('nios', 'network_insight')):
+        config = replace(device_config(), source=source)
+        plan = Plan()
+        names = [s.name for s in get_device_sources(config, FakeSource([], []),
+                                                    plan)]
+        assert names == [expected], (source, names)
+        # the inapplicable one is skipped silently, not warned about
+        assert plan.warnings == []
+
+
+def test_gateways_are_additive_not_a_fallback(monkeypatch):
+    from ibx_kentik_prepop.plan import get_device_sources
+    from ibx_kentik_prepop.model import Plan
+
+    config = device_config(use_gateways=True)
+    names = [s.name for s in get_device_sources(config, FakeSource([], []),
+                                                Plan())]
+    assert names == ['uai', 'fake']
+
+
+def test_discovered_devices_supersede_inferred_gateways(monkeypatch):
+    from ibx_kentik_prepop.plan import gather_devices
+    from ibx_kentik_prepop.model import Plan
+
+    discovered = Device(name='lon-rtr-01', mgmt_ip='10.1.0.1', role='router',
+                        origin='uai')
+    inferred = Device(name='lon-rtr-01', mgmt_ip='10.1.0.1', role='router',
+                      origin='default_gateway')
+
+    for order in ([inferred], [discovered]):
+        other = [discovered] if order[0] is inferred else [inferred]
+        plan = Plan()
+        first, second = FakeSource([], order), FakeSource([], other)
+        monkeypatch.setattr(plan_module, 'get_device_sources',
+                            lambda cfg, src, p: [first, second])
+        devices = gather_devices(device_config(), first, subnets(), plan)
+
+        assert len(devices) == 1
+        assert devices[0].origin == 'uai'
+
+
+def test_a_gateway_that_is_a_discovered_devices_address_is_merged(monkeypatch):
+    from ibx_kentik_prepop.plan import gather_devices
+    from ibx_kentik_prepop.model import Plan
+
+    # the DHCP gateway 10.1.0.1 is lon-rtr-01's own interface
+    discovered = Device(name='lon-rtr-01', mgmt_ip='10.1.0.1', role='router',
+                        interfaces=[{'address': '10.1.0.1'},
+                                    {'address': '10.1.4.1'}], origin='uai')
+    gateway = Device(name='10_1_0_1', mgmt_ip='10.1.0.1', role='router',
+                     interfaces=[{'address': '10.1.0.1'}],
+                     origin='default_gateway')
+    # and this one is its other interface
+    transit_gateway = Device(name='10_1_4_1', mgmt_ip='10.1.4.1', role='router',
+                             interfaces=[{'address': '10.1.4.1'}],
+                             origin='default_gateway')
+
+    for order in ((discovered, gateway, transit_gateway),
+                  (gateway, transit_gateway, discovered)):
+        sources = [FakeSource([], [d]) for d in order]
+        monkeypatch.setattr(plan_module, 'get_device_sources',
+                            lambda cfg, src, p: sources)
+        plan = Plan()
+        devices = gather_devices(device_config(use_gateways=True), sources[0],
+                                 subnets(), plan)
+
+        assert [d.name for d in devices] == ['lon-rtr-01'], order
+        assert devices[0].origin == 'uai'
+
+
+def test_no_devices_found_is_reported(monkeypatch):
+    from ibx_kentik_prepop.plan import gather_devices
+    from ibx_kentik_prepop.model import Plan
+
+    empty = FakeSource([], [])
+    monkeypatch.setattr(plan_module, 'get_device_sources',
+                        lambda cfg, src, p: [empty])
+    plan = Plan()
+    gather_devices(device_config(), empty, subnets(), plan)
+
+    assert 'no_devices_discovered' in [w.category for w in plan.warnings]
+
+
+def test_every_source_off_is_a_configuration_problem():
+    from ibx_kentik_prepop.config import validate_source_credentials
+    config = device_config(use_insight=False, use_uai=False,
+                           use_gateways=False)
+    problems = validate_source_credentials(config)
+
+    assert any('nothing to read devices from' in p for p in problems)

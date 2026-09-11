@@ -17,9 +17,9 @@ def make_config(**overrides):
     defaults = dict(source='uddi', site_key='Site', class_key='kentik_class',
                     site_type_key='site_type', max_prefix_len=None,
                     site_filter=None, include_address_blocks=False,
-                    devices=False, use_insight=False,
-                    use_uai=False, use_gateways=False, network_view=None,
-                    ip_space=None, gm=None)
+                    devices=False, use_insight=None, use_uai=None,
+                    use_gateways=None, network_view=None, ip_space=None,
+                    gm=None)
     defaults.update(overrides)
     return build_config(Namespace(**defaults), ini_file='does-not-exist.ini')
 

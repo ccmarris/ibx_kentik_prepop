@@ -247,10 +247,21 @@ EOF
 
 ## Devices
 
-Device candidates come from Network Insight (`--use-insight`, NIOS only),
-Universal Asset Insights (`--use-uai`, UDDI only), or — when neither is
-available — inference from the DHCP `routers` option (`--use-gateways`), which
-is flagged as inferred rather than discovered.
+Device candidates come from Network Insight (`--use-insight`, NIOS only) and
+Universal Asset Insights (`--use-uai`, UDDI only), both **on by default** — each
+exists on only one platform, so enabling both simply means "use whichever
+discovery this platform has", and the inapplicable one is skipped silently.
+Turn either off with `--no-use-insight` / `--no-use-uai`.
+
+Inference from the DHCP `routers` option (`--use-gateways`) is **off by
+default** and **additive**: it supplements discovery rather than replacing it,
+its devices are flagged as inferred rather than discovered, and a device that
+discovery also found always wins over the inferred one. Candidates are
+de-duplicated on the Kentik device name, falling back to the management
+address, and the report header lists which sources contributed.
+
+If discovery returns nothing and gateway inference is off, the report says so
+rather than showing an empty device list.
 
 **Interfaces and sending IPs.** Network Insight interfaces
 (`discovery:deviceinterface`) and UAI asset addresses become the device's

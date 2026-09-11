@@ -203,9 +203,10 @@ a { color: var(--ibx-green); text-decoration: underline; }
       <fieldset>
         <legend>Devices</legend>
         <div class="check" id="devices_row"><input type="checkbox" id="devices"><label for="devices">Include device candidates in the site report</label></div>
-        <div class="check"><input type="checkbox" id="use_insight"><label for="use_insight">NIOS Network Insight</label></div>
-        <div class="check"><input type="checkbox" id="use_uai"><label for="use_uai">Universal Asset Insights</label></div>
+        <div class="check"><input type="checkbox" id="use_insight" checked><label for="use_insight">NIOS Network Insight</label></div>
+        <div class="check"><input type="checkbox" id="use_uai" checked><label for="use_uai">Universal Asset Insights</label></div>
         <div class="check"><input type="checkbox" id="use_gateways"><label for="use_gateways">Infer from DHCP routers option</label></div>
+        <p class="hint">Each discovery source only exists on one platform, so both can stay ticked — whichever does not apply is skipped. Gateway inference is additive, and its devices are inferred rather than discovered.</p>
 
         <div id="device_fields" class="hidden">
           <label for="device_mode">Create devices for</label>

@@ -105,12 +105,18 @@ def parseargs():
                         help='aggregate summarised prefixes up to this length')
     parser.add_argument('--devices', action='store_true',
                         help='include the device candidate section on a site run')
-    parser.add_argument('--use-insight', action='store_true',
-                        help='use NIOS Network Insight discovered devices')
-    parser.add_argument('--use-uai', action='store_true',
-                        help='use Universal Asset Insights discovered assets')
-    parser.add_argument('--use-gateways', action='store_true',
-                        help='infer routers from the DHCP routers option')
+    parser.add_argument('--use-insight', action=argparse.BooleanOptionalAction,
+                        default=None,
+                        help='use NIOS Network Insight discovered devices '
+                             '(default: on, and skipped unless --source nios)')
+    parser.add_argument('--use-uai', action=argparse.BooleanOptionalAction,
+                        default=None,
+                        help='use Universal Asset Insights discovered assets '
+                             '(default: on, and skipped unless --source uddi)')
+    parser.add_argument('--use-gateways', action=argparse.BooleanOptionalAction,
+                        default=None,
+                        help='also infer routers from the DHCP routers option '
+                             '(default: off)')
     parser.add_argument('--device-mode', choices=['flow', 'nms'], default=None,
                         help='create devices for flow (default) or for NMS')
     parser.add_argument('--sending-ips', choices=['mgmt', 'all'], default=None,

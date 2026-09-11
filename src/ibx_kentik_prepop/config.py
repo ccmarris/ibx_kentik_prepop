@@ -181,6 +181,14 @@ DEFAULT_DESCRIPTION_KEYS = ('description', 'comment', 'comments', 'notes',
 #                 monitoring template applies
 # Both agent modes need an agent and a credential from the Kentik credential
 # vault.
+# Network Insight and UAI are enabled by default: each only exists on one
+# platform, so enabling both simply means "use whichever discovery this
+# platform has". Gateway inference stays opt-in because it invents devices from
+# a DHCP option rather than discovering them.
+DEFAULT_USE_INSIGHT = True
+DEFAULT_USE_UAI = True
+DEFAULT_USE_GATEWAYS = False
+
 DEFAULT_SNMP_MODE = 'none'
 SNMP_MODES = ('none', 'community', 'agent-flow', 'agent-full')
 AGENT_SNMP_MODES = ('agent-flow', 'agent-full')
@@ -271,9 +279,9 @@ class DeviceConfig:
     Device discovery and creation behaviour
     '''
     enabled: bool = False
-    use_insight: bool = False
-    use_uai: bool = False
-    use_gateways: bool = False
+    use_insight: bool = DEFAULT_USE_INSIGHT
+    use_uai: bool = DEFAULT_USE_UAI
+    use_gateways: bool = DEFAULT_USE_GATEWAYS
     roles: tuple = ('router', 'switch', 'firewall')
     description_keys: tuple = DEFAULT_DESCRIPTION_KEYS
     mode: str = DEFAULT_DEVICE_MODE
@@ -383,6 +391,30 @@ def _first(mapping: dict, *keys) -> str:
             value = candidate
             break
     return value
+
+
+def _tri_bool(cli, yaml_value, default: bool) -> bool:
+    '''
+    Resolve a three-state boolean: command line, then YAML, then the default
+
+    argparse's store_true cannot express "not given", so the flags that have a
+    True default use BooleanOptionalAction and arrive as None when unset.
+
+    Parameters:
+        cli: value from the command line, or None when not given
+        yaml_value: value from the YAML config, or None when absent
+        default (bool): value to use when neither was given
+
+    Returns:
+        bool: resolved value
+    '''
+    if cli is not None:
+        result = bool(cli)
+    elif yaml_value is not None:
+        result = _as_bool(yaml_value, default)
+    else:
+        result = default
+    return result
 
 
 def _as_bool(value, default: bool = False) -> bool:
@@ -654,11 +686,14 @@ def build_config(args, ini_file: str = '', yaml_file: str = '') -> ProjectConfig
 
     device = DeviceConfig(
         enabled=_as_bool(getattr(args, 'devices', None) or device_yaml.get('enabled'), False),
-        use_insight=_as_bool(getattr(args, 'use_insight', None)
-                             or device_yaml.get('use_insight'), False),
-        use_uai=_as_bool(getattr(args, 'use_uai', None) or device_yaml.get('use_uai'), False),
-        use_gateways=_as_bool(getattr(args, 'use_gateways', None)
-                              or device_yaml.get('use_gateways'), False),
+        use_insight=_tri_bool(getattr(args, 'use_insight', None),
+                              device_yaml.get('use_insight'),
+                              DEFAULT_USE_INSIGHT),
+        use_uai=_tri_bool(getattr(args, 'use_uai', None),
+                          device_yaml.get('use_uai'), DEFAULT_USE_UAI),
+        use_gateways=_tri_bool(getattr(args, 'use_gateways', None),
+                               device_yaml.get('use_gateways'),
+                               DEFAULT_USE_GATEWAYS),
         roles=_as_tuple(device_yaml.get('roles')) or ('router', 'switch', 'firewall'),
         description_keys=(_as_tuple(device_yaml.get('description_keys'))
                           or DEFAULT_DESCRIPTION_KEYS),
@@ -751,8 +786,8 @@ def validate_source_credentials(config: ProjectConfig) -> list:
     if config.task == 'devices' and not (config.device.use_insight
                                          or config.device.use_uai
                                          or config.device.use_gateways):
-        problems.append('The device task needs a device source '
-                        '(--use-insight, --use-uai or --use-gateways)')
+        problems.append('Every device source is turned off, so there is '
+                        'nothing to read devices from')
     for problem in problems:
         logger.error('Configuration problem: %s', problem)
     return problems

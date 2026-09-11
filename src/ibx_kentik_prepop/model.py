@@ -333,6 +333,7 @@ class Plan:
     device_mode: str = MODE_FLOW
     snmp_mode: str = 'none'
     agent_id: str = ''
+    device_sources: list = field(default_factory=list)
     plan_id: int = 0
     plan_name: str = ''
     capacity: dict = field(default_factory=dict)
@@ -412,6 +413,7 @@ class Plan:
             'device_mode': self.device_mode,
             'snmp_mode': self.snmp_mode,
             'agent_id': self.agent_id,
+            'device_sources': self.device_sources,
             'plan_id': self.plan_id,
             'plan_name': self.plan_name,
             'capacity': self.capacity,

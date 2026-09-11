@@ -133,9 +133,14 @@ def get_source(config):
     return source
 
 
-def get_device_source(config, ipam_source, plan: Plan):
+def get_device_sources(config, ipam_source, plan: Plan) -> list:
     '''
-    Choose the device data source, honouring platform constraints
+    Every device source that applies to the selected platform
+
+    Network Insight only exists on NIOS and Universal Asset Insights only on
+    UDDI, so both can be enabled at once - each is simply skipped on the
+    platform it does not belong to, rather than warned about. Gateway inference
+    is additive on top.
 
     Parameters:
         config (ProjectConfig): assembled configuration
@@ -143,36 +148,125 @@ def get_device_source(config, ipam_source, plan: Plan):
         plan (Plan): plan to record warnings against
 
     Returns:
-        SiteSource: adapter to call get_devices() on, or None
+        list: adapters to call get_devices() on
     '''
-    source = None
+    sources = []
 
     if config.device.use_insight:
         if config.source == 'nios':
-            source = NetworkInsight(config)
+            sources.append(NetworkInsight(config))
         else:
-            plan.add_warning('device_source',
-                             'Network Insight is only available with --source nios',
-                             'falling back to default gateway inference')
-    elif config.device.use_uai:
+            logger.debug('Network Insight needs --source nios, skipping it')
+    if config.device.use_uai:
         if config.source == 'uddi':
-            source = UAI(config)
+            sources.append(UAI(config))
         else:
-            plan.add_warning('device_source',
-                             'Universal Asset Insights is only available with '
-                             '--source uddi',
-                             'falling back to default gateway inference')
+            logger.debug('Universal Asset Insights needs --source uddi, '
+                         'skipping it')
+    if config.device.use_gateways:
+        sources.append(ipam_source)
 
-    if source is None:
-        source = ipam_source
-        if not config.device.use_gateways:
-            plan.add_warning('device_source',
-                             'No discovery source selected, inferring routers from '
-                             'the DHCP routers option',
-                             'these are inferred, not discovered')
+    if not sources:
+        plan.add_warning('device_source',
+                         'No device source applies to this run',
+                         'enable Network Insight (NIOS), Universal Asset '
+                         'Insights (UDDI), or gateway inference')
 
-    logger.debug('Using %s as the device source', source.name)
-    return source
+    logger.debug('Device sources: %s',
+                 ', '.join(s.name for s in sources) or 'none')
+    return sources
+
+
+def gather_devices(config, ipam_source, records: list, plan: Plan) -> list:
+    '''
+    Collect device candidates from every applicable source
+
+    Sources are merged rather than chosen between. Two candidates are the same
+    device when their Kentik names match, or when they share any address - a
+    DHCP gateway address belongs to some device, so a discovered device holding
+    that address is that device, and creating both would put two Kentik devices
+    on one box, each claiming the same sending IP. A discovered device always
+    wins over one merely inferred from a gateway option, whichever order the
+    sources ran in.
+
+    Parameters:
+        config (ProjectConfig): assembled configuration
+        ipam_source (SiteSource): the IPAM adapter already in use
+        records (list): normalised subnet records
+        plan (Plan): plan to record warnings against
+
+    Returns:
+        list: Device objects
+    '''
+    def keys_of(device) -> list:
+        '''
+        Every identity a device can be recognised by
+        '''
+        found = [k for k in [sanitise_device_name(device.name).casefold()] if k]
+        found.extend(str(a) for a in device.addresses() if a)
+        return found
+
+    devices = []
+    index = {}
+
+    for source in get_device_sources(config, ipam_source, plan):
+        found = source.get_devices(records) or []
+        if found:
+            plan.device_sources.append(source.name)
+        for device in found:
+            keys = keys_of(device)
+            if not keys:
+                continue
+
+            # A discovered device can match several inferred gateways at once -
+            # one per interface address - so every match has to be collapsed,
+            # not just the first.
+            matches = []
+            for key in keys:
+                match = index.get(key)
+                if match is not None and not any(m is match for m in matches):
+                    matches.append(match)
+
+            if not matches:
+                devices.append(device)
+                for key in keys:
+                    index[key] = device
+                continue
+
+            inferred = [m for m in matches if m.origin == 'default_gateway']
+            if device.origin == 'default_gateway' or len(inferred) != len(matches):
+                logger.debug('%s already known as %s, skipping the %s copy',
+                             device.name, matches[0].name, device.origin)
+                continue
+
+            position = min(devices.index(m) for m in inferred)
+            for match in inferred:
+                devices.remove(match)
+                for key in keys_of(match):
+                    index[key] = device
+            devices.insert(position, device)
+            for key in keys:
+                index[key] = device
+            logger.info('%s (%s) supersedes %d inferred gateway(s): %s',
+                        device.name, device.origin, len(inferred),
+                        ', '.join(m.mgmt_ip for m in inferred))
+
+    wanted = tuple(r.lower() for r in config.device.roles)
+    kept = [d for d in devices if not wanted or d.role in wanted]
+    if len(kept) != len(devices):
+        logger.info('Filtered %d device(s) not in roles %s',
+                    len(devices) - len(kept), ', '.join(wanted))
+
+    if not kept and not config.device.use_gateways:
+        plan.add_warning('no_devices_discovered',
+                         'No devices came back from the discovery sources',
+                         'check the Network Insight / UAI licence and data, or '
+                         'add gateway inference to infer routers from the DHCP '
+                         'routers option')
+
+    logger.info('Gathered %d device candidate(s) from %s', len(kept),
+                ', '.join(plan.device_sources) or 'no source')
+    return kept
 
 
 def attach_devices(sites: list, devices: list, plan: Plan) -> None:
@@ -346,10 +440,7 @@ def build_device_plan(config, kentik=None) -> tuple:
                          'run with --list-keys to see which EA/tag keys are '
                          'populated, then pass the right one with --site-key')
 
-    device_source = get_device_source(config, ipam_source, plan)
-    devices = device_source.get_devices(records)
-    wanted = tuple(r.lower() for r in config.device.roles)
-    devices = [d for d in devices if not wanted or d.role in wanted]
+    devices = gather_devices(config, ipam_source, records, plan)
     plan.devices = devices
 
     # Resolve the plan first: the id goes into every flow device payload.
@@ -568,13 +659,7 @@ def build_plan(config, kentik=None) -> Plan:
                          'populated, then pass the right one with --site-key')
 
     if config.device.enabled:
-        device_source = get_device_source(config, ipam_source, plan)
-        devices = device_source.get_devices(records)
-        wanted = tuple(r.lower() for r in config.device.roles)
-        kept = [d for d in devices if not wanted or d.role in wanted]
-        if len(kept) != len(devices):
-            logger.info('Filtered %d device(s) not in roles %s',
-                        len(devices) - len(kept), ', '.join(wanted))
+        kept = gather_devices(config, ipam_source, records, plan)
         attach_devices(sites, kept, plan)
         plan.devices = kept
 

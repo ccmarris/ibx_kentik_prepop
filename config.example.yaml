@@ -61,8 +61,13 @@ site:
 
 device:
   enabled: false
-  use_insight: false
-  use_uai: false
+
+  # Network Insight (NIOS only) and UAI (UDDI only) are both on by default:
+  # each exists on one platform, so the inapplicable one is simply skipped.
+  # Gateway inference is additive and off by default - it infers routers from
+  # the DHCP routers option rather than discovering them.
+  use_insight: true
+  use_uai: true
   use_gateways: false
   roles:
     - router

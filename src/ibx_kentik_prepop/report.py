@@ -249,6 +249,8 @@ def render_table(plan, dry_run: bool = True) -> str:
                   f"{f' via agent {plan.agent_id}' if plan.agent_id else ''}   "
                   f"Plan: {plan.plan_name or 'none'}"
                   f"{'' if not plan.plan_id else f' (id {plan.plan_id})'}{slots}\n")
+        if plan.device_sources:
+            out.write(f"Device sources: {', '.join(plan.device_sources)}\n")
         out.write(f"Devices: {stats['device_entries']} "
                   f"({stats['device_actions']['create']} create, "
                   f"{stats['device_actions']['exists']} already in Kentik, "

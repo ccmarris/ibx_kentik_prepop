@@ -869,6 +869,11 @@ el('snmp_mode').addEventListener('change', function () {
   updateSnmpMode();
   invalidatePlan('SNMP collection changed');
 });
+['use_insight', 'use_uai', 'use_gateways'].forEach(function (field) {
+  el(field).addEventListener('change', function () {
+    invalidatePlan('Device sources changed');
+  });
+});
 ['agent_id', 'credential_name', 'monitoring_template_id'].forEach(function (field) {
   el(field).addEventListener('change', function () {
     invalidatePlan('Agent settings changed');

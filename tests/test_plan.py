@@ -156,8 +156,8 @@ def test_build_plan_filters_device_roles(monkeypatch):
                Device(name='ap1', role='other', site_name='LON-DC1')]
     monkeypatch.setattr(plan_module, 'get_source',
                         lambda cfg: FakeSource(records, devices))
-    monkeypatch.setattr(plan_module, 'get_device_source',
-                        lambda cfg, src, p: src)
+    monkeypatch.setattr(plan_module, 'get_device_sources',
+                        lambda cfg, src, p: [src])
 
     plan = build_plan(config, kentik=None)
     assert [d.name for d in plan.devices] == ['rtr1']
