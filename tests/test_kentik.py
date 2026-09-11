@@ -478,3 +478,30 @@ def test_update_only_echoes_writable_fields(monkeypatch):
     assert body['device_bgp_type'] == 'none'
     assert body['device_sample_rate'] == '1'
     assert sent['url'].endswith('/device/v202504beta2/device/696557')
+
+
+def test_update_never_echoes_the_refused_credential_field(monkeypatch):
+    '''
+    A device configured in the portal can carry flowSnmpCredentialName, and
+    echoing it back on an update draws the same "type `never`" 400 the create
+    did.
+    '''
+    from ibx_kentik_prepop.targets.kentik import (UNWRITABLE_DEVICE_FIELDS,
+                                                  WRITABLE_DEVICE_FIELDS)
+
+    assert 'flow_snmp_credential_name' not in WRITABLE_DEVICE_FIELDS
+    assert 'flow_snmp_credential_name' in UNWRITABLE_DEVICE_FIELDS
+
+    kentik = target()
+    sent = {}
+    monkeypatch.setattr(kentik, '_request',
+                        lambda method, url, body=None: sent.update({'body': body})
+                        or {'device': {'id': '55'}})
+
+    raw = dict(REAL_DEVICE, flowSnmpCredentialName='marrison-test')
+    kentik.update_device_placement(raw, Device(name='10_58_207_1',
+                                               mgmt_ip='10.58.207.1'),
+                                   site_id='42')
+
+    assert 'flow_snmp_credential_name' not in sent['body']['device']
+    assert 'flowSnmpCredentialName' not in sent['body']['device']

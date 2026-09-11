@@ -84,9 +84,13 @@ WRITABLE_DEVICE_FIELDS = (
     'device_snmp_ip', 'device_snmp_community', 'device_snmp_v3_conf',
     'device_bgp_type', 'device_bgp_neighbor_ip', 'device_bgp_neighbor_ip6',
     'device_bgp_neighbor_asn', 'device_bgp_password', 'use_bgp_device_id',
-    'device_bgp_flowspec', 'nms', 'flow_snmp_credential_name',
-    'monitoring_template_id', 'device_alert',
+    'device_bgp_flowspec', 'nms', 'monitoring_template_id', 'device_alert',
 )
+
+# In DeviceConcise but refused by the API with "Expected a value of type
+# `never`", so it must never be echoed back on an update either - a device
+# configured in the portal can carry a value this tool cannot resend.
+UNWRITABLE_DEVICE_FIELDS = ('flow_snmp_credential_name',)
 
 
 def camel(name: str) -> str:
