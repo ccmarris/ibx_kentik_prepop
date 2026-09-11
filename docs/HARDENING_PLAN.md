@@ -16,6 +16,7 @@ Each item records the evidence, so nobody has to re-derive why it matters.
 | 4 | State file written once, non-atomically | `save_state` uses temp + `os.replace`; both apply loops wrapped in `try/finally` |
 | 6 | Bad numbers and unhandled errors return HTML 500 | `as_int` in `web/server.py`; `@app.errorhandler(Exception)` returns JSON; `plan.py` plan-id coercion guarded |
 | 8 | Duplicated plan prologue | `derive_sites()` extracted in `plan.py` |
+| 3 | List endpoints read only the first page | `KENTIK.list_all()` follows a cursor, checks the reported total, and raises a `kentik_list_truncated` plan warning |
 
 ---
 
@@ -46,33 +47,38 @@ intermittently should run to completion.
 
 ---
 
-## 3. Pagination on the Kentik list endpoints
+## 3. Pagination on the Kentik list endpoints — **done, with one open question**
 
-**Priority: high, but blocked on a tenant.** This is the only finding that could
-silently corrupt a plan rather than merely annoy an operator.
+Implemented as `KENTIK.list_all()`. It follows a page cursor wherever the
+response offers one, compares the accumulated count against any total the
+response reports, and records a short read in `truncation_warnings`, which
+`plan.report_truncation()` turns into a `kentik_list_truncated` plan warning.
 
-**Problem.** `KENTIK.get_sites()` and `KENTIK.get_devices()`
-(`src/ibx_kentik_prepop/targets/kentik.py`) read the first response body and
-stop. Every other list in this codebase paginates — NIOS `_paging` /
-`next_page_id`, UDDI `_page_token`, UAI cursor — so Kentik is the exception.
+The design point worth preserving: **page size is not requested by default**
+(`page_size = 0`). The tool sends the same bare request it always sent and only
+*reads* the paging metadata that comes back, because sending an unrecognised
+query parameter would be a worse failure than not paging. Two guards cover the
+parameter names being wrong — a repeated page token stops the loop and names
+`page_token_param`, and `max_pages` caps it regardless.
 
-**Why it matters.** `device_index()` is what decides `create` vs `exists`. If
-the device list is truncated server-side, an existing device that falls off the
-first page is planned as a `create`. Best case Kentik rejects it on a duplicate
-name; worst case it succeeds and burns a licensed slot. The same truncation on
-`site_index()` would make devices land with no site.
+Response keys are read in every plausible spelling (`next_page_token` /
+`nextPageToken` / `next_cursor` …, at the top level or under
+`pagination`/`meta`/`page`/`paging`), because this API answers in camelCase
+where it accepts snake_case. `count` is deliberately **not** read as a total:
+some APIs use it for the page size, and a false warning on every run would teach
+the operator to ignore the real one.
 
-**Blocked on.** The response shape. Nobody has confirmed whether
-`GET /site/v202211/sites` and `GET /device/v202504beta2/device` return a
-`pagination` block, a `total`, or an implicit cap.
+### Still open
 
-**Do first (unblocked, useful either way):** log the returned count against any
-`total` / `pagination` field present in the response, and raise a plan warning
-when the two disagree. That turns a silent truncation into a visible one without
-having to guess the pagination contract.
-
-**Then:** once the shape is known, follow the cursor the same way the other
-adapters do, with a page cap for safety.
+- **The two parameter names are unverified.** `page_size` / `page_token` are the
+  gRPC-gateway convention but have not been confirmed against a tenant. They
+  only matter if `page_size` is set or a cursor comes back. If a large account
+  reports a truncation warning, check them first.
+- **It is a warning, not a blocker.** Making it a hard stop was tempting, but
+  the total-detection is heuristic across several response shapes and a
+  false positive that refuses a legitimate apply would be worse than a loud
+  warning. Revisit once a real tenant confirms the shape — at that point the
+  detection stops being a guess and a blocker becomes the right call.
 
 ---
 

@@ -52,6 +52,7 @@ import json
 import logging
 import re
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from urllib.parse import parse_qs, urlparse
 
 logger = logging.getLogger(__name__)
 
@@ -141,6 +142,11 @@ DEVICES = []
 
 # Requests received, so a test can assert on what was actually sent
 CALLS = []
+
+# Devices are served two at a time so the client's paging is exercised: the
+# real API's page size is not known, and a client that only ever reads page one
+# plans an existing device as a create.
+PAGE_SIZE = 2
 
 
 def camel(name: str) -> str:
@@ -251,6 +257,26 @@ class Handler(BaseHTTPRequestHandler):
     Route the handful of endpoints this tool uses
     '''
 
+    def _page(self, items: list, key: str) -> dict:
+        '''
+        Serve one page of a collection, gRPC-gateway style
+
+        Parameters:
+            items (list): the whole collection
+            key (str): response key the collection sits under
+
+        Returns:
+            dict: response body with a pagination block
+        '''
+        query = parse_qs(urlparse(self.path).query)
+        size = int((query.get('page_size') or [PAGE_SIZE])[0])
+        start = int((query.get('page_token') or ['0'])[0])
+        window = items[start:start + size]
+        pagination = {'total_count': len(items)}
+        if start + size < len(items):
+            pagination['next_page_token'] = str(start + size)
+        return {key: window, 'pagination': pagination}
+
     def _send(self, payload, code: int = 200) -> None:
         '''
         Write a JSON response
@@ -294,7 +320,7 @@ class Handler(BaseHTTPRequestHandler):
         elif path == '/api/ddi/v1/dhcp/option_code':
             self._send({'results': OPTION_CODES})
         elif path == '/site/v202211/sites':
-            self._send({'sites': SITES})
+            self._send(self._page(SITES, 'sites'))
         elif path == '/api/v5/plans':
             self._send({'plans': PLANS})
         elif path == '/kagent/v202401/agents':
@@ -302,7 +328,7 @@ class Handler(BaseHTTPRequestHandler):
         elif path == '/credential/v202407alpha1/group':
             self._send({'credentials': CREDENTIALS})
         elif path == '/device/v202504beta2/device':
-            self._send({'devices': [as_response(d) for d in DEVICES]})
+            self._send(self._page([as_response(d) for d in DEVICES], 'devices'))
         elif path.startswith('/device/v202504beta2/device/name/'):
             name = path.rsplit('/', 1)[1]
             match = next((d for d in DEVICES

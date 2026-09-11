@@ -577,3 +577,39 @@ def test_an_unparseable_projection_error_falls_back_to_core(monkeypatch):
     assert set(attempts[-1]) == set(ASSET_FIELDS_CORE)
     assert assets[0]['name'] == 'lon-rtr-01'
     assert 'does not recognise' in source.last_error
+
+
+def test_a_truncated_kentik_read_is_reported_on_the_plan(monkeypatch):
+    '''
+    A short list read silently turns an existing device into a create, so it
+    has to reach the operator rather than only the log
+    '''
+    from ibx_kentik_prepop import plan as plan_module
+    from ibx_kentik_prepop.plan import build_device_plan
+
+    class TruncatedKentik:
+        truncation_warnings = ['Kentik device(s): Kentik reports 900 but only '
+                               '100 were read']
+
+        def list_plans(self):
+            return []
+
+        def resolve_plan(self, name, plan_id, plans):
+            return None, ''
+
+        def error_text(self):
+            return ''
+
+        def site_index(self):
+            return {}
+
+        def device_index(self):
+            return {}
+
+    monkeypatch.setattr(plan_module, 'get_source',
+                        lambda cfg: FakeSource([], []))
+    plan, _ = build_device_plan(make_config(task='devices'), TruncatedKentik())
+
+    warning = [w for w in plan.warnings if w.category == 'kentik_list_truncated']
+    assert warning, [w.category for w in plan.warnings]
+    assert 'planned as creates' in warning[0].detail

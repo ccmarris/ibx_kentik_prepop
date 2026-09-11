@@ -108,6 +108,89 @@ IDEMPOTENT_METHODS = ('GET', 'HEAD', 'PUT', 'DELETE', 'OPTIONS')
 MAX_RETRY_WAIT = 30.0
 
 
+# Where a gRPC-gateway list response carries its paging metadata. The exact
+# spelling is not settled across Kentik's API versions and the response is
+# lowerCamelCase where the request is snake_case, so every likely place is read
+# rather than guessed at. An endpoint that paginates none of these ways simply
+# returns one page, which is what this client did before.
+PAGINATION_CONTAINERS = ('pagination', 'meta', 'page', 'paging')
+NEXT_TOKEN_KEYS = ('next_page_token', 'nextPageToken', 'next_cursor',
+                   'nextCursor', 'next_page_id', 'nextPageId')
+# Deliberately excludes 'count': it is used by some APIs for the size of the
+# page rather than the size of the collection, and a false truncation warning
+# on every run would teach the operator to ignore a real one.
+TOTAL_KEYS = ('total_count', 'totalCount', 'total_items', 'totalItems', 'total')
+
+
+def _pagination_blocks(payload: dict) -> list:
+    '''
+    The places in a list response that could hold paging metadata
+
+    Parameters:
+        payload (dict): parsed list response
+
+    Returns:
+        list: the response itself plus any nested pagination container
+    '''
+    blocks = [payload]
+    for container in PAGINATION_CONTAINERS:
+        nested = payload.get(container)
+        if isinstance(nested, dict):
+            blocks.append(nested)
+    return blocks
+
+
+def next_page_token(payload: dict) -> str:
+    '''
+    The cursor for the next page of a list response, if there is one
+
+    Parameters:
+        payload (dict): parsed list response
+
+    Returns:
+        str: the token, empty string when this is the last page
+    '''
+    token = ''
+    if isinstance(payload, dict):
+        for block in _pagination_blocks(payload):
+            for key in NEXT_TOKEN_KEYS:
+                value = block.get(key)
+                if value not in (None, '', 0):
+                    token = str(value)
+                    break
+            if token:
+                break
+    return token
+
+
+def reported_total(payload: dict):
+    '''
+    How many objects Kentik says exist, when it says so
+
+    Parameters:
+        payload (dict): parsed list response
+
+    Returns:
+        int: the total, or None when the response does not report one
+    '''
+    total = None
+    if isinstance(payload, dict):
+        for block in _pagination_blocks(payload):
+            for key in TOTAL_KEYS:
+                value = block.get(key)
+                if isinstance(value, bool):
+                    continue
+                if isinstance(value, int):
+                    total = value
+                    break
+                if isinstance(value, str) and value.strip().isdigit():
+                    total = int(value.strip())
+                    break
+            if total is not None:
+                break
+    return total
+
+
 def retry_wait(response, attempt: int, backoff: float) -> float:
     '''
     How long to wait before trying a request again
@@ -411,8 +494,13 @@ class KENTIK:
         self.timeout = self.kentik.timeout_seconds
         self.retries = max(int(self.kentik.retries), 0)
         self.retry_backoff = max(float(self.kentik.retry_backoff), 0.0)
+        self.page_size = max(int(self.kentik.page_size), 0)
+        self.max_pages = max(int(self.kentik.max_pages), 1)
         # Detail of the most recent failed request, for reporting to the caller
         self.last_error = {}
+        # List reads that came back short, for reporting on the plan - a
+        # truncated read silently turns an existing object into a create
+        self.truncation_warnings = []
         logger.debug('Kentik target initialised (sites via %s, devices via %s)',
                      self.kentik.grpc_base_url, self.kentik.base_url)
         return
@@ -435,7 +523,8 @@ class KENTIK:
         self.kentik = config.kentik
         return self
 
-    def _request(self, method: str, url: str, body: dict = None) -> dict:
+    def _request(self, method: str, url: str, body: dict = None,
+                 params: dict = None) -> dict:
         '''
         Issue a request and return the parsed JSON body
 
@@ -450,6 +539,7 @@ class KENTIK:
             method (str): HTTP method
             url (str): fully qualified URL
             body (dict): optional JSON body
+            params (dict): optional query parameters
 
         Returns:
             dict: parsed response, or None on failure
@@ -462,6 +552,7 @@ class KENTIK:
             logger.debug('%s %s (attempt %d)', method, url, attempt + 1)
             try:
                 response = self.session.request(method, url, json=body,
+                                                params=params,
                                                 timeout=self.timeout)
                 response.raise_for_status()
                 try:
@@ -516,6 +607,93 @@ class KENTIK:
             text = f"{status}: {body}" if body else f"{status}: {self.last_error.get('message', '')}"
         return text[:300]
 
+    def list_all(self, url: str, keys, label: str) -> list:
+        '''
+        Retrieve every page of a Kentik list endpoint
+
+        The whole list has to be read, because it is what decides create versus
+        update: a site or device missing from a truncated response is planned as
+        a create, and for a device that means a duplicate name at best and a
+        wasted licence slot at worst. So a short read is never silent - it is
+        recorded in truncation_warnings and reported on the plan.
+
+        A page token is followed when the response offers one. Page size is only
+        requested when configured, so by default this sends exactly the request
+        it always sent and simply reads the paging metadata that comes back.
+
+        Parameters:
+            url (str): fully qualified list URL
+            keys: response keys the collection may be under, in order
+            label (str): what is being listed, for messages
+
+        Returns:
+            list: accumulated objects, empty list on failure
+        '''
+        items = []
+        params = {}
+        if self.page_size:
+            params[self.kentik.page_size_param] = self.page_size
+
+        token = ''
+        seen_tokens = set()
+        total = None
+        pages = 0
+
+        while True:
+            if token:
+                params[self.kentik.page_token_param] = token
+            payload = self._request('GET', url, params=params or None)
+            if not isinstance(payload, dict):
+                break
+
+            batch = []
+            for key in keys:
+                value = payload.get(key)
+                if isinstance(value, list):
+                    batch = value
+                    break
+            items.extend(batch)
+            pages += 1
+            if total is None:
+                total = reported_total(payload)
+
+            token = next_page_token(payload)
+            if not token or not batch:
+                break
+
+            # A token we have already used means the page token parameter is not
+            # being honoured - very likely the wrong name for this API version.
+            # Stop rather than fetching page one until the heat death of the
+            # universe, and say which knob to turn.
+            if token in seen_tokens:
+                self.truncation_warnings.append(
+                    f'{label}: Kentik kept returning the same page token, so '
+                    f'only the first {len(items)} were read - '
+                    f'{self.kentik.page_token_param!r} is probably not the right '
+                    f'page token parameter for this API version')
+                logger.error('%s', self.truncation_warnings[-1])
+                break
+            seen_tokens.add(token)
+
+            if pages >= self.max_pages:
+                self.truncation_warnings.append(
+                    f'{label}: stopped after {pages} pages ({len(items)} read) '
+                    f'and Kentik offered more - raise max_pages if the account '
+                    f'really is this large')
+                logger.error('%s', self.truncation_warnings[-1])
+                break
+
+        if total is not None and len(items) < total:
+            self.truncation_warnings.append(
+                f'{label}: Kentik reports {total} but only {len(items)} were '
+                f'read, so the plan is being built against an incomplete '
+                f'picture')
+            logger.error('%s', self.truncation_warnings[-1])
+
+        logger.info('Retrieved %d %s over %d page(s)%s', len(items), label, pages,
+                    f' of {total} reported' if total is not None else '')
+        return items
+
     def get_sites(self) -> list:
         '''
         Retrieve every site from Kentik
@@ -524,12 +702,7 @@ class KENTIK:
             list: raw site dicts, empty list on failure
         '''
         url = f'{self.kentik.grpc_base_url}{self.kentik.site_list}'
-        payload = self._request('GET', url)
-        sites = []
-        if isinstance(payload, dict):
-            sites = payload.get('sites') or payload.get('site') or []
-        logger.info('Retrieved %d existing Kentik site(s)', len(sites))
-        return sites
+        return self.list_all(url, ('sites', 'site'), 'Kentik site(s)')
 
     def site_index(self, sites: list = None) -> dict:
         '''
@@ -663,12 +836,7 @@ class KENTIK:
             list: raw device dicts, empty list on failure
         '''
         url = f'{self.kentik.grpc_base_url}{self.kentik.device_list}'
-        payload = self._request('GET', url)
-        devices = []
-        if isinstance(payload, dict):
-            devices = payload.get('devices') or []
-        logger.info('Retrieved %d existing Kentik device(s)', len(devices))
-        return devices
+        return self.list_all(url, ('devices', 'device'), 'Kentik device(s)')
 
     def device_index(self, devices: list = None) -> dict:
         '''

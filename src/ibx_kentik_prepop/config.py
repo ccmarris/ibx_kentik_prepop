@@ -206,6 +206,20 @@ DEFAULT_TIMEOUT = 30
 DEFAULT_RETRIES = 3
 DEFAULT_RETRY_BACKOFF = 2.0
 
+# Kentik list pagination. The whole site and device list has to be read: an
+# object missing from a truncated response is planned as a create, which for a
+# device means a duplicate name or a wasted licence slot. Page size is left at 0
+# - meaning "do not ask, take whatever the API gives" - because the parameter
+# names below are not confirmed for every API version, and sending an unknown
+# query parameter is a worse failure than not paging. A page token in the
+# response is followed whatever the page size, and a short read is reported.
+# VERIFY the two parameter names against the tenant's API docs if a large
+# account ever reports a truncation warning.
+DEFAULT_KENTIK_PAGE_SIZE = 0
+DEFAULT_KENTIK_PAGE_SIZE_PARAM = 'page_size'
+DEFAULT_KENTIK_PAGE_TOKEN_PARAM = 'page_token'
+DEFAULT_KENTIK_MAX_PAGES = 100
+
 
 @dataclass(frozen=True)
 class NiosConfig:
@@ -259,6 +273,10 @@ class KentikConfig:
     auth_token_header: str = DEFAULT_AUTH_TOKEN_HEADER
     retries: int = DEFAULT_RETRIES
     retry_backoff: float = DEFAULT_RETRY_BACKOFF
+    page_size: int = DEFAULT_KENTIK_PAGE_SIZE
+    page_size_param: str = DEFAULT_KENTIK_PAGE_SIZE_PARAM
+    page_token_param: str = DEFAULT_KENTIK_PAGE_TOKEN_PARAM
+    max_pages: int = DEFAULT_KENTIK_MAX_PAGES
 
 
 @dataclass(frozen=True)
@@ -625,6 +643,12 @@ def build_config(args, ini_file: str = '', yaml_file: str = '') -> ProjectConfig
         auth_token_header=str(kentik_yaml.get('auth_token_header', DEFAULT_AUTH_TOKEN_HEADER)),
         retries=int(kentik_yaml.get('retries', DEFAULT_RETRIES)),
         retry_backoff=float(kentik_yaml.get('retry_backoff', DEFAULT_RETRY_BACKOFF)),
+        page_size=int(kentik_yaml.get('page_size', DEFAULT_KENTIK_PAGE_SIZE)),
+        page_size_param=str(kentik_yaml.get('page_size_param',
+                                            DEFAULT_KENTIK_PAGE_SIZE_PARAM)),
+        page_token_param=str(kentik_yaml.get('page_token_param',
+                                             DEFAULT_KENTIK_PAGE_TOKEN_PARAM)),
+        max_pages=int(kentik_yaml.get('max_pages', DEFAULT_KENTIK_MAX_PAGES)),
     )
 
     site_type_map = dict(DEFAULT_SITE_TYPE_MAP)

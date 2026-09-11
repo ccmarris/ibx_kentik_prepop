@@ -224,6 +224,37 @@ recovery: existing devices are detected by name and reported as `exists`.
 Tune with `retries` and `retry_backoff` in the `kentik:` section of the YAML
 config (defaults: 3 and 2.0 seconds).
 
+### Reading the whole list
+
+The site and device lists decide **create versus update**, so they are read in
+full. An existing object missing from a truncated response would be planned as a
+create — for a device that means a duplicate name at best and a wasted licence
+slot at worst.
+
+`GET /site/v202211/sites` and `GET /device/v202504beta2/device` are followed
+page by page whenever the response offers a cursor, and the counts are checked
+against any total the response reports. A short read is raised as a
+`kentik_list_truncated` **plan warning**, not just a log line.
+
+Page size is **not requested** by default: the tool sends the same bare request
+it always did and simply reads whatever paging metadata comes back, because
+sending an unrecognised query parameter would be a worse failure than not
+paging. Two guards cover the parameter names being wrong for a given API
+version — a repeated page token stops the read and names
+`page_token_param`, and `max_pages` caps it regardless.
+
+| YAML key (`kentik:`) | Default | Purpose |
+|---|---|---|
+| `page_size` | `0` | `0` = don't ask, take the API's own page size |
+| `page_size_param` | `page_size` | Query parameter carrying the page size |
+| `page_token_param` | `page_token` | Query parameter carrying the cursor |
+| `max_pages` | `100` | Hard stop, whatever the API offers |
+
+> **Unverified:** the two parameter names have not been confirmed against a
+> tenant. They only matter if `page_size` is set or a cursor comes back; if a
+> large account ever reports a truncation warning, check them against the
+> tenant's API documentation first.
+
 ## Kentik import artefacts
 
 `--export-kentik PREFIX` writes the plan in shapes Kentik itself consumes, so
@@ -578,7 +609,10 @@ device endpoints on the other. It reproduces the behaviours that matter:
 - a device create is **rejected without `device_bgp_type`**, exactly as the real
   API does;
 - the free plan has four device slots against six device candidates, so the
-  capacity guard is exercised.
+  capacity guard is exercised;
+- the site and device lists are served **two at a time with a page cursor**, so
+  a client that only reads page one is caught — re-run the device task after
+  applying it and every created device must come back as `exists`.
 
 ```bash
 cp tests/mock.ini.example tests/mock.ini

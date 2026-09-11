@@ -42,12 +42,14 @@ class FakeSession:
     def __init__(self, script):
         self.script = list(script)
         self.calls = []
+        self.params = []
         self.headers = {}
         self.verify = True
         return
 
-    def request(self, method, url, json=None, timeout=None):
+    def request(self, method, url, json=None, params=None, timeout=None):
         self.calls.append((method, url))
+        self.params.append(dict(params) if params else params)
         outcome = self.script.pop(0)
         if isinstance(outcome, Exception):
             raise outcome

@@ -401,6 +401,31 @@ def device_mismatch(raw_device: dict, device, site_id: str, config) -> dict:
     return mismatch
 
 
+def report_truncation(kentik, plan) -> None:
+    '''
+    Record any short read of a Kentik list on the plan
+
+    A truncated read is the one failure that quietly changes the answer: an
+    existing site or device that was not read back is planned as a create. It
+    has to reach the operator, not just the log.
+
+    Parameters:
+        kentik (KENTIK): Kentik target, or None
+        plan (Plan): plan to record warnings against
+
+    Returns:
+        None
+    '''
+    for message in getattr(kentik, 'truncation_warnings', []) or ():
+        plan.add_warning('kentik_list_truncated', message,
+                         'existing objects that were not read back will be '
+                         'planned as creates - do not apply until this is '
+                         'resolved')
+    if kentik is not None:
+        kentik.truncation_warnings = []
+    return
+
+
 def derive_sites(config, plan, no_subnets_detail: str = '') -> tuple:
     '''
     Read the IPAM source and derive the sites both tasks are built on
@@ -550,6 +575,7 @@ def build_device_plan(config, kentik=None) -> tuple:
             site_ids[key] = str(raw_site.get('id', ''))
 
     device_index = kentik.device_index() if kentik is not None else {}
+    report_truncation(kentik, plan)
 
     unplaced = []
     missing_sites = set()
@@ -695,6 +721,7 @@ def build_plan(config, kentik=None) -> Plan:
     index = {}
     if kentik is not None:
         index = kentik.site_index()
+        report_truncation(kentik, plan)
 
     for site in sites:
         derived = {c: site.networks(c) for c in CLASSIFICATIONS}
