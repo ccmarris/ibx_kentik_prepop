@@ -59,8 +59,12 @@ logger = logging.getLogger(__name__)
 # changed between NIOS releases. The raw payload is kept on each Device so the
 # flattening below can be corrected without re-pulling the data.
 DEVICE_OBJTYPE = 'discovery:device'
-DEVICE_FIELDS = ('name,address,model,os_version,vendor,type,network_view,'
-                 'description,location,interface_count,extattrs')
+# CORE is what every release exposes; EXTRA is the richer detail. A grid that
+# does not know one of the EXTRA names rejects the whole request, so the
+# request falls back to CORE rather than reporting no devices at all.
+DEVICE_FIELDS_CORE = 'name,address,model,os_version,vendor,type,network_view'
+DEVICE_FIELDS = (f'{DEVICE_FIELDS_CORE},description,location,'
+                 f'interface_count,extattrs')
 INTERFACE_OBJTYPE = 'discovery:deviceinterface'
 INTERFACE_FIELDS = ('device,name,ip_address,network_view,type,description,'
                     'speed,admin_status,oper_status')
@@ -84,7 +88,8 @@ class NetworkInsight(NIOS):
             list: list of Device objects with origin 'network_insight'
         '''
         devices = []
-        raw = self.get_all(DEVICE_OBJTYPE, DEVICE_FIELDS)
+        raw = self.get_all(DEVICE_OBJTYPE, DEVICE_FIELDS,
+                           fallback_fields=DEVICE_FIELDS_CORE)
         interfaces = self.interfaces_by_device()
 
         for obj in raw:
@@ -123,7 +128,8 @@ class NetworkInsight(NIOS):
             dict: device _ref -> list of normalised interface dicts
         '''
         grouped = {}
-        for obj in self.get_all(INTERFACE_OBJTYPE, INTERFACE_FIELDS):
+        for obj in self.get_all(INTERFACE_OBJTYPE, INTERFACE_FIELDS,
+                                fallback_fields='device,name,ip_address'):
             parent = obj.get('device')
             if isinstance(parent, dict):
                 parent = parent.get('_ref', '')

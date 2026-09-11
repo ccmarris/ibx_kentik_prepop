@@ -213,6 +213,12 @@ def gather_devices(config, ipam_source, records: list, plan: Plan) -> list:
         found = source.get_devices(records) or []
         if found:
             plan.device_sources.append(source.name)
+
+        # An API failure must never look like "this source has no devices".
+        error = getattr(source, 'last_error', '')
+        if error:
+            plan.add_warning('device_source_error',
+                             f'{source.name} reported a problem', error)
         for device in found:
             keys = keys_of(device)
             if not keys:
@@ -258,11 +264,12 @@ def gather_devices(config, ipam_source, records: list, plan: Plan) -> list:
                     len(devices) - len(kept), ', '.join(wanted))
 
     if not kept and not config.device.use_gateways:
+        tried = ', '.join(plan.device_sources) or 'no applicable source'
         plan.add_warning('no_devices_discovered',
-                         'No devices came back from the discovery sources',
-                         'check the Network Insight / UAI licence and data, or '
-                         'add gateway inference to infer routers from the DHCP '
-                         'routers option')
+                         f'No devices came back from discovery ({tried})',
+                         "tick 'Infer from DHCP routers option' "
+                         '(--use-gateways) to derive routers from IPAM instead, '
+                         'or check the Network Insight / UAI licence and data')
 
     logger.info('Gathered %d device candidate(s) from %s', len(kept),
                 ', '.join(plan.device_sources) or 'no source')

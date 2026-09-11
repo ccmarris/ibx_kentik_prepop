@@ -484,3 +484,31 @@ def test_every_source_off_is_a_configuration_problem():
     problems = validate_source_credentials(config)
 
     assert any('nothing to read devices from' in p for p in problems)
+
+
+def test_a_source_api_failure_is_reported_not_silent(monkeypatch):
+    '''
+    A rejected field projection used to return an empty list, which looks
+    exactly like a tenant with no devices.
+    '''
+    from ibx_kentik_prepop.plan import gather_devices
+    from ibx_kentik_prepop.model import Plan
+
+    class FailingSource(FakeSource):
+        name = 'uai'
+
+        def get_devices(self, subnets=None):
+            self.last_error = ('UAI asset search failed: 400 unknown field '
+                               '"description"')
+            return []
+
+    failing = FailingSource([], [])
+    monkeypatch.setattr(plan_module, 'get_device_sources',
+                        lambda cfg, src, p: [failing])
+    plan = Plan()
+    gather_devices(device_config(), failing, subnets(), plan)
+
+    categories = [w.category for w in plan.warnings]
+    assert 'device_source_error' in categories
+    detail = [w.detail for w in plan.warnings if w.category == 'device_source_error'][0]
+    assert 'unknown field' in detail

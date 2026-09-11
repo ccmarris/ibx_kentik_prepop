@@ -261,7 +261,16 @@ de-duplicated on the Kentik device name, falling back to the management
 address, and the report header lists which sources contributed.
 
 If discovery returns nothing and gateway inference is off, the report says so
-rather than showing an empty device list.
+and names the switch to turn on, rather than showing an empty device list.
+
+**Source API failures are never silent.** Both discovery adapters ask for more
+fields than every release knows about — `description`, `location` and
+`extattrs` on `discovery:device`, and `description`/`comment`/`tags` in the UAI
+asset projection. A platform that does not recognise one of those names rejects
+the *whole* request, which is indistinguishable from having no devices. So each
+adapter retries with a core field set it knows is safe, keeps the devices, and
+reports the degradation as a `device_source_error` warning naming the field it
+lost. Any other API failure surfaces the same way.
 
 **Interfaces and sending IPs.** Network Insight interfaces
 (`discovery:deviceinterface`) and UAI asset addresses become the device's

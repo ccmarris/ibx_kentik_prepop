@@ -57,12 +57,17 @@ logger = logging.getLogger(__name__)
 
 
 # Asset search projection. The API rejects an 'asset.' prefix on field names,
-# so bare normalised names are used. VERIFY the vendor/model/type field names
-# and the category value covering network infrastructure on a live tenant -
-# 'compute' is the confirmed category for virtual machines.
-ASSET_FIELDS = ('name', 'ip_addresses', 'category', 'type', 'vendor', 'model',
-                'os_version', 'location', 'managed', 'providers',
-                'description', 'comment', 'tags')
+# so bare normalised names are used.
+#
+# CORE is the set confirmed in production use. EXTRA is everything that makes
+# the report richer but is not worth losing the whole search over: a tenant
+# that does not know one of these names rejects the request outright, which
+# would otherwise look exactly like "this tenant has no devices". The search
+# retries with CORE alone if the full projection is refused.
+ASSET_FIELDS_CORE = ('name', 'ip_addresses', 'category', 'providers', 'managed')
+ASSET_FIELDS_EXTRA = ('type', 'vendor', 'model', 'os_version', 'location',
+                      'description', 'comment', 'tags')
+ASSET_FIELDS = ASSET_FIELDS_CORE + ASSET_FIELDS_EXTRA
 PAGE_SIZE = 1000
 
 
@@ -78,13 +83,46 @@ class UAI(UDDI):
         Retrieve assets from the Universal Asset Insights search API
 
         Issues POST /assets/search with a full sync, a FilterEL filter and a
-        field projection, following cursor pagination until exhausted.
+        field projection, following cursor pagination until exhausted. If the
+        full projection is refused, the search is retried with the core field
+        set, because losing every device to one unrecognised field name is far
+        worse than losing the vendor column.
 
         Parameters:
             category (str): asset category to match, empty for all
 
         Returns:
             list: raw asset dicts, empty list on failure
+        '''
+        assets = self._search(category, ASSET_FIELDS)
+
+        if assets is None and self.last_error:
+            logger.warning('Retrying the asset search with the core field set '
+                           'after: %s', self.last_error)
+            self.reduced_fields = True
+            assets = self._search(category, ASSET_FIELDS_CORE)
+            if assets is not None:
+                self.last_error = (
+                    f'The asset search refused the full field projection, so '
+                    f'vendor, model, OS and description are unavailable '
+                    f'({self.first_error})')
+
+        if assets is None:
+            assets = []
+
+        logger.info('Retrieved %d UAI asset(s)', len(assets))
+        return assets
+
+    def _search(self, category: str, fields: tuple):
+        '''
+        One asset search, following pagination to the end
+
+        Parameters:
+            category (str): asset category to match, empty for all
+            fields (tuple): field names to project
+
+        Returns:
+            list: raw asset dicts, or None when the request failed
         '''
         assets = []
         url = f'{self.base_url}{self.config.uddi.asset_search}'
@@ -93,7 +131,7 @@ class UAI(UDDI):
         while True:
             body = {
                 'sync': {'mode': 'FULL'},
-                'fields': list(ASSET_FIELDS),
+                'fields': list(fields),
                 'page_size': PAGE_SIZE,
             }
             if category:
@@ -101,14 +139,23 @@ class UAI(UDDI):
             if page_token:
                 body['page_token'] = page_token
 
-            logger.debug('POST %s category=%r page_token=%s', url, category, page_token)
+            logger.debug('POST %s fields=%d category=%r page_token=%s', url,
+                         len(fields), category, page_token)
             try:
                 response = self.session.post(url, json=body, timeout=self.timeout)
                 response.raise_for_status()
             except requests.RequestException as exc:
-                logger.error('UAI asset search failed: %s', exc)
-                assets = []
-                break
+                detail = ''
+                status = 0
+                if getattr(exc, 'response', None) is not None:
+                    status = exc.response.status_code
+                    detail = exc.response.text[:300].replace('\n', ' ')
+                self.last_error = (f'UAI asset search failed: {status or exc} '
+                                   f'{detail}').strip()
+                if not self.first_error:
+                    self.first_error = self.last_error
+                logger.error('%s', self.last_error)
+                return None
 
             payload = response.json()
             data = payload.get('data') or []
@@ -118,7 +165,6 @@ class UAI(UDDI):
             if not page_token or not data:
                 break
 
-        logger.info('Retrieved %d UAI asset(s)', len(assets))
         return assets
 
     @staticmethod

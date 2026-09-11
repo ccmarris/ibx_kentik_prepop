@@ -90,6 +90,11 @@ class SiteSource:
             None
         '''
         self.config = config
+        # Set by an adapter when an API call failed, so a caller can report why
+        # a source came back empty instead of it looking like no data.
+        self.last_error = ''
+        self.first_error = ''
+        self.reduced_fields = False
         return
 
     def get_subnets(self) -> list:

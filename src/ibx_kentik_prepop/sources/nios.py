@@ -90,14 +90,20 @@ class NIOS(SiteSource):
         logger.debug('NIOS source initialised against %s', self.wapi_url)
         return
 
-    def get_all(self, objtype: str, return_fields: str = '', params: dict = None) -> list:
+    def get_all(self, objtype: str, return_fields: str = '',
+                params: dict = None, fallback_fields: str = '') -> list:
         '''
         Retrieve every page of a WAPI object type
+
+        A grid that does not know one of the requested return fields rejects
+        the whole request, which looks identical to having no data. When
+        fallback_fields is given, the request is retried with those instead.
 
         Parameters:
             objtype (str): WAPI object type, e.g. 'network'
             return_fields (str): comma separated additional return fields
             params (dict): additional query parameters
+            fallback_fields (str): reduced field list to retry with on failure
 
         Returns:
             list: accumulated objects, empty list on failure
@@ -126,8 +132,25 @@ class NIOS(SiteSource):
                 response = self.session.get(url, params=query, timeout=self.timeout)
                 response.raise_for_status()
             except requests.RequestException as exc:
-                logger.error('NIOS request to %s failed: %s', url, exc)
+                detail = ''
+                if getattr(exc, 'response', None) is not None:
+                    detail = exc.response.text[:300].replace('\n', ' ')
+                self.last_error = (f'NIOS request for {objtype} failed: '
+                                   f'{exc} {detail}').strip()
+                if not self.first_error:
+                    self.first_error = self.last_error
+                logger.error('%s', self.last_error)
                 results = []
+                if fallback_fields and fallback_fields != return_fields:
+                    logger.warning('Retrying %s with a reduced field list after: '
+                                   '%s', objtype, self.last_error)
+                    self.reduced_fields = True
+                    results = self.get_all(objtype, fallback_fields, params)
+                    if results:
+                        self.last_error = (
+                            f'The grid refused some requested {objtype} fields, '
+                            f'so parts of the device detail are unavailable '
+                            f'({self.first_error})')
                 break
 
             payload = response.json()

@@ -116,7 +116,11 @@ class UDDI(SiteSource):
                 response = self.session.get(url, params=query, timeout=self.timeout)
                 response.raise_for_status()
             except requests.RequestException as exc:
-                logger.error('UDDI request to %s failed: %s', url, exc)
+                detail = ''
+                if getattr(exc, 'response', None) is not None:
+                    detail = exc.response.text[:300].replace('\n', ' ')
+                self.last_error = f'UDDI request to {path} failed: {exc} {detail}'.strip()
+                logger.error('%s', self.last_error)
                 results = []
                 break
 
