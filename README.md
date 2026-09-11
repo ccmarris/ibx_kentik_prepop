@@ -580,3 +580,9 @@ assert on exactly what was sent. The web UI can be pointed at it the same way:
 - **UDDI `Locations` objects as a site source.** They carry a real postal
   address and coordinates and would be a good addition; this version derives
   sites from subnet metadata and discovery data only.
+
+## Acknowledgements
+
+Thanks to **Brian Davenport** for his assistance with the Kentik configuration —
+the site, device and plan semantics this tool relies on were settled with his
+help. Thanks to **Ross Gibson** for testing against NIOS data.
