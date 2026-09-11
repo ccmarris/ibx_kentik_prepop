@@ -341,7 +341,7 @@ Universal Agent polling it:
 | `none` (default) | no SNMP | — |
 | `community` | Kentik polls with a community string (YAML only, to keep it out of the browser) | `device_snmp_community` |
 | `agent-flow` | **Agent-based SNMP for Flow Enrichment (Traffic device)** — the agent polls interface data to enrich this device's flow | `nms{agent_id, ip_address, snmp{credential_name, port}}` |
-| `agent-full` | **Agent-based SNMP for Full Monitoring** — the agent also collects the full NMS metric set | the same, plus `monitoring_template_id` |
+| `agent-full` | **Agent-based SNMP for Full Monitoring (NMS device, Traffic optional)** — the agent also collects the full NMS metric set | the same, plus `monitoring_template_id` |
 
 `--device-mode nms` implies `agent-full`. Both agent modes **require an agent**
 (`--agent-id`, or the dropdown, populated from `GET /kagent/v202401/agents` —
