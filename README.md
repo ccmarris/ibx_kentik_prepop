@@ -463,6 +463,12 @@ need to press Dry run again. When Apply is disabled the reasons are listed under
 the buttons, with the numbers (for example `6 device(s) to create exceeds the 4
 slot(s) left on plan 'Free Flowpak Plan'`).
 
+While an apply is streaming, the device selections are frozen and both buttons
+are disabled, and no background refresh runs — otherwise a stray click would
+re-render the plan out from under the results you are watching. When the apply
+finishes the plan refreshes itself (so the devices move to "already in Kentik")
+while the results stay on screen. Only an explicit **Dry run** clears them.
+
 ### Applying from the UI
 
 The apply calls the Kentik API in-process and streams one result per site, so

@@ -161,6 +161,7 @@ function renderDevicePlan(plan) {
 
 let refreshTimer = null;
 let planInFlight = false;
+let applyInFlight = false;
 let refreshQueued = false;
 
 function invalidatePlan(message) {
@@ -174,6 +175,14 @@ function schedulePlanRefresh() {
   // Changing a selection only ever shrinks or re-points the change set, so
   // rather than dead-ending on a stale plan the dry run is re-run and the
   // fingerprint stays in step with what is on screen.
+  //
+  // Never while an apply is streaming: re-rendering the plan would replace the
+  // results the operator is watching, and would re-enable the Apply button
+  // mid-stream. The refresh is queued and runs once the apply finishes.
+  if (applyInFlight) {
+    refreshQueued = true;
+    return;
+  }
   if (refreshTimer) { clearTimeout(refreshTimer); }
   refreshTimer = setTimeout(function () {
     refreshTimer = null;
@@ -340,7 +349,7 @@ function renderPlan(plan) {
     renderTable('warnings_table', ['category', 'message', 'detail'],
                 plan.warnings || []);
     show('warnings_card', (plan.warnings || []).length > 0);
-    ['sites_card', 'subnets_card', 'devices_card', 'apply_card'].forEach(function (id) {
+    ['sites_card', 'subnets_card', 'devices_card'].forEach(function (id) {
       show(id, false);
     });
 
@@ -352,7 +361,7 @@ function renderPlan(plan) {
     }
 
     renderApplyBlockers(reasons);
-    el('run_apply').disabled = reasons.length > 0;
+    el('run_apply').disabled = applyInFlight || reasons.length > 0;
     el('run_apply').title = reasons.join('. ');
     el('apply_hint').textContent = reasons.length
       ? 'Apply is disabled: ' + reasons.join('. ') + '.'
@@ -410,7 +419,6 @@ function renderPlan(plan) {
               devices);
   show('devices_card', devices.length > 0);
 
-  show('apply_card', false);
   const changes = plan.stats.actions.create + plan.stats.actions.update;
   const reasons = [];
   if (!plan.kentik_available) {
@@ -424,7 +432,7 @@ function renderPlan(plan) {
   }
   renderApplyBlockers(reasons);
   const applyable = reasons.length === 0;
-  el('run_apply').disabled = !applyable;
+  el('run_apply').disabled = applyInFlight || !applyable;
   el('run_apply').title = applyable ? '' : reasons.join('. ');
   el('apply_hint').textContent = applyable
     ? changes + ' site(s) will change. You will see the per-site diff before anything is written.'
@@ -541,6 +549,9 @@ async function runPlan(options) {
   const body = formBody();
   el('run_plan').disabled = true;
   planInFlight = true;
+  // An explicit dry run clears the previous apply results so they cannot be
+  // mistaken for the current state; a background refresh leaves them alone.
+  if (!quiet) { show('apply_card', false); }
   setStatus(quiet ? 'Refreshing the plan for your selection...'
                   : 'Building the plan...', false);
   try {
@@ -733,6 +744,12 @@ function confirmSites(plan) {
   show('confirm_modal', true);
 }
 
+function freezeDeviceTable(frozen) {
+  el('device_plan_table').querySelectorAll('input, select').forEach(function (control) {
+    control.disabled = frozen;
+  });
+}
+
 function startApplyTable(plan) {
   const isDevices = plan.task === 'devices';
   const items = isDevices
@@ -784,7 +801,10 @@ async function runApply() {
   const body = formBody();
   body.confirm = true;
   body.fingerprint = currentPlan.fingerprint;
+  applyInFlight = true;
   el('run_apply').disabled = true;
+  el('run_plan').disabled = true;
+  freezeDeviceTable(true);
   startApplyTable(currentPlan);
   setStatus('Applying...', false);
 
@@ -845,6 +865,13 @@ async function runApply() {
     currentPlan = null;
   } catch (error) {
     setStatus('Apply failed: ' + error, true);
+  } finally {
+    applyInFlight = false;
+    el('run_plan').disabled = false;
+    freezeDeviceTable(false);
+    // Reconcile the view with what Kentik now holds, keeping the results.
+    refreshQueued = false;
+    schedulePlanRefresh();
   }
 }
 
